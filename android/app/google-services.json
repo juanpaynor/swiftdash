@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "138838080732",
+    "project_id": "swiftdash-da9b1",
+    "storage_bucket": "swiftdash-da9b1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:138838080732:android:c987eb54f9ffaa934d8819",
+        "android_client_info": {
+          "package_name": "com.example.myapp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "138838080732-obd4imnevv78sp6q0fhlpvp5fu15ah58.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAY4z0NsgixRgem_GASurwD7ifbJEpK8ZY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "138838080732-obd4imnevv78sp6q0fhlpvp5fu15ah58.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
