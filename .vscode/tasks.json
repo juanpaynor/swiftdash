@@ -1,0 +1,45 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "flutter_pub_get",
+			"type": "shell",
+			"command": "flutter pub get",
+			"args": [],
+			"problemMatcher": [
+				"$dart-cli"
+			],
+			"group": "build"
+		},
+		{
+			"label": "analyze",
+			"type": "shell",
+			"command": "flutter analyze",
+			"args": [],
+			"problemMatcher": [
+				"$dart-cli"
+			],
+			"group": "build"
+		},
+		{
+			"label": "flutter_pub_get_retry",
+			"type": "shell",
+			"command": "flutter pub get",
+			"args": [],
+			"problemMatcher": [
+				"$dart-cli"
+			],
+			"group": "build"
+		},
+		{
+			"label": "flutter_pub_add_mapbox_gl_web",
+			"type": "shell",
+			"command": "flutter pub add mapbox_gl_web:^0.16.0",
+			"args": [],
+			"problemMatcher": [
+				"$dart-cli"
+			],
+			"group": "build"
+		}
+	]
+}
