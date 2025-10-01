@@ -5,9 +5,11 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
 import '../models/vehicle_type.dart';
-import '../widgets/map_address_picker.dart';
-import '../widgets/mapbox_address_picker_facade.dart';
-import '../config/env.dart';
+
+
+import '../widgets/shared_delivery_map.dart';
+import '../widgets/address_input_field.dart';
+
 import '../widgets/modern_widgets.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../services/delivery_service.dart';
@@ -22,14 +24,13 @@ class CreateDeliveryScreen extends StatefulWidget {
 
 class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
     with TickerProviderStateMixin {
-  int _currentStep = 0;
   List<VehicleType> _vehicleTypes = [];
   bool _isLoading = true;
   VehicleType? _selectedVehicleType;
   final _formKey = GlobalKey<FormState>();
+  int _currentStep = 0;
 
   late AnimationController _animationController;
-  late AnimationController _stepAnimationController;
 
   // Form controllers
   final _pickupAddressController = TextEditingController();
@@ -67,10 +68,6 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
       duration: AppTheme.animationMedium,
       vsync: this,
     );
-    _stepAnimationController = AnimationController(
-      duration: AppTheme.animationSlow,
-      vsync: this,
-    );
     _loadVehicleTypes();
     _animationController.forward();
   }
@@ -78,7 +75,6 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
   @override
   void dispose() {
     _animationController.dispose();
-    _stepAnimationController.dispose();
     _pickupAddressController.dispose();
     _pickupContactNameController.dispose();
     _pickupContactPhoneController.dispose();
@@ -109,10 +105,19 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
           .eq('is_active', true)
           .order('base_price');
 
+      List<VehicleType> types = (response as List)
+          .map((type) => VehicleType.fromJson(type))
+          .toList();
+      // Sort: motorcycle first, truck last
+      types.sort((a, b) {
+        if (a.name.toLowerCase() == 'motorcycle') return -1;
+        if (b.name.toLowerCase() == 'motorcycle') return 1;
+        if (a.name.toLowerCase() == 'truck') return 1;
+        if (b.name.toLowerCase() == 'truck') return -1;
+        return 0;
+      });
       setState(() {
-        _vehicleTypes = (response as List)
-            .map((type) => VehicleType.fromJson(type))
-            .toList();
+        _vehicleTypes = types;
         _isLoading = false;
       });
     } catch (e) {
@@ -182,7 +187,6 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
 
       if (mounted) {
         HapticFeedback.heavyImpact();
-        // Navigate to matching screen with the delivery ID
         context.go('/matching/${delivery.id}');
       }
     } catch (e) {
@@ -218,20 +222,70 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
   }
 
   void _nextStep() {
-    HapticFeedback.lightImpact();
     if (_currentStep < 3) {
-      setState(() => _currentStep++);
-      _stepAnimationController.forward();
+      // Validate current step
+      if (_validateCurrentStep()) {
+        setState(() => _currentStep++);
+        HapticFeedback.lightImpact();
+      }
     } else {
+      // Final step - create delivery
       _createDelivery();
     }
   }
 
   void _previousStep() {
-    HapticFeedback.lightImpact();
     if (_currentStep > 0) {
       setState(() => _currentStep--);
-      _stepAnimationController.reverse();
+      HapticFeedback.lightImpact();
+    }
+  }
+
+  bool _validateCurrentStep() {
+    switch (_currentStep) {
+      case 0: // Vehicle Selection
+        if (_selectedVehicleType == null) {
+          ModernToast.error(
+            context: context,
+            message: 'Please select a vehicle type',
+          );
+          return false;
+        }
+        return true;
+      case 1: // Pickup Details
+        if (_pickupAddressController.text.isEmpty ||
+            _pickupContactNameController.text.isEmpty ||
+            _pickupContactPhoneController.text.isEmpty) {
+          ModernToast.error(
+            context: context,
+            message: 'Please fill in all pickup details',
+          );
+          return false;
+        }
+        return true;
+      case 2: // Delivery Details
+        if (_deliveryAddressController.text.isEmpty ||
+            _deliveryContactNameController.text.isEmpty ||
+            _deliveryContactPhoneController.text.isEmpty) {
+          ModernToast.error(
+            context: context,
+            message: 'Please fill in all delivery details',
+          );
+          return false;
+        }
+        return true;
+      case 3: // Package Details
+        if (_packageDescriptionController.text.isEmpty ||
+            _packageWeightController.text.isEmpty) {
+          ModernToast.error(
+            context: context,
+            message: 'Please fill in package details',
+          );
+          return false;
+        }
+        return true;
+      default:
+        return true;
     }
   }
 
@@ -240,33 +294,9 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
     if (_isLoading && _vehicleTypes.isEmpty) {
       return Scaffold(
         backgroundColor: AppTheme.backgroundColor,
-        body: Container(
-          decoration: const BoxDecoration(
-            gradient: AppTheme.backgroundGradient,
-          ),
-          child: const Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                SizedBox(
-                  width: 60,
-                  height: 60,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 4,
-                    valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primaryBlue),
-                  ),
-                ),
-                SizedBox(height: AppTheme.spacing20),
-                Text(
-                  'Loading vehicle types...',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                    color: AppTheme.textSecondary,
-                  ),
-                ),
-              ],
-            ),
+        body: const Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primaryBlue),
           ),
         ),
       );
@@ -274,74 +304,92 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
 
     return Scaffold(
       backgroundColor: AppTheme.backgroundColor,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: Container(
-          margin: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: AppTheme.surfaceColor,
-            borderRadius: BorderRadius.circular(AppTheme.radius12),
-            boxShadow: [
-              BoxShadow(
-                color: AppTheme.shadowLight,
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: IconButton(
-            icon: const Icon(
-              Icons.arrow_back_ios_rounded,
-              color: AppTheme.textPrimary,
-              size: 20,
+      body: Column(
+        children: [
+          // App Bar
+          Container(
+            padding: EdgeInsets.only(
+              top: MediaQuery.of(context).padding.top + 16,
+              left: 20,
+              right: 20,
+              bottom: 16,
             ),
-            onPressed: () {
-              HapticFeedback.lightImpact();
-              try {
-                context.pop();
-              } catch (e) {
-                context.go('/home');
-              }
-            },
-          ),
-        ),
-        title: Text(
-          'Create Delivery',
-          style: GoogleFonts.inter(
-            fontSize: 20,
-            fontWeight: FontWeight.w700,
-            color: AppTheme.textPrimary,
-            letterSpacing: -0.3,
-          ),
-        ),
-        centerTitle: true,
-      ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: AppTheme.backgroundGradient,
-        ),
-        child: Column(
-          children: [
-            // Step Indicator
-            _buildStepIndicator(),
-            
-            // Form Content
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.all(AppTheme.spacing20),
-                child: Form(
-                  key: _formKey,
-                  child: _buildCurrentStep(),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(
+                bottom: Radius.circular(AppTheme.radius28),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.shadowLight,
+                  blurRadius: 10,
+                  offset: Offset(0, 5),
                 ),
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: AppTheme.dividerColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: IconButton(
+                    icon: const Icon(
+                      Icons.arrow_back_ios_rounded,
+                      color: AppTheme.textPrimary,
+                      size: 18,
+                    ),
+                    onPressed: () {
+                      HapticFeedback.lightImpact();
+                      if (_currentStep > 0) {
+                        _previousStep();
+                      } else {
+                        try {
+                          context.pop();
+                        } catch (e) {
+                          context.go('/home');
+                        }
+                      }
+                    },
+                  ),
+                ),
+                Expanded(
+                  child: Center(
+                    child: Text(
+                      'Send Package',
+                      style: GoogleFonts.inter(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 40), // Balance the back button
+              ],
+            ),
+          ).animate().slideY(begin: -0.2).fadeIn(),
+
+          // Step Indicator
+          _buildStepIndicator(),
+
+          // Main Content
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(AppTheme.spacing20),
+              child: Form(
+                key: _formKey,
+                child: _buildCurrentStep(),
               ),
             ),
-            
-            // Bottom Navigation
-            _buildBottomNavigation(),
-          ],
-        ),
+          ),
+
+          // Bottom Navigation
+          _buildBottomNavigation(),
+        ],
       ),
     );
   }
@@ -506,43 +554,62 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
         ),
         const SizedBox(height: AppTheme.spacing24),
         
-        (Env.mapProvider == 'mapbox'
-            ? MapboxAddressPicker(
-                label: 'Pickup Address',
-                initialAddress: _pickupAddressController.text,
-                isPickup: true,
-                otherLocation: _deliveryLocation,
-                onLocationSelected: (address, lat, lng, distance, otherLocation) {
-                  setState(() {
-                    _pickupAddressController.text = address;
-                    _pickupLatitude = lat;
-                    _pickupLongitude = lng;
-                    if (distance != null) {
-                      _distance = distance;
-                      _updatePrice();
-                    }
-                  });
-                  _maybeRequestQuote();
-                },
-              )
-            : MapAddressPicker(
+        // Shared Map (will show both pickup and delivery markers)
+        SharedDeliveryMap(
+          onLocationSelected: (address, lat, lng, isPickup) {
+            setState(() {
+              if (isPickup) {
+                _pickupAddressController.text = address;
+                _pickupLatitude = lat;
+                _pickupLongitude = lng;
+              } else {
+                _deliveryAddressController.text = address;
+                _deliveryLatitude = lat;
+                _deliveryLongitude = lng;
+              }
+              _updatePrice();
+            });
+            _maybeRequestQuote();
+          },
+          initialPickupAddress: _pickupAddressController.text,
+          initialDeliveryAddress: _deliveryAddressController.text,
+        ).animate().slideY(begin: 0.2).fadeIn(),
+        
+        const SizedBox(height: AppTheme.spacing20),
+        
+        // Pickup Address Input
+        AddressInputField(
           label: 'Pickup Address',
+          hintText: 'Enter pickup location',
           initialAddress: _pickupAddressController.text,
-          isPickup: true,
-          otherLocation: _deliveryLocation,
-          onLocationSelected: (address, lat, lng, distance, otherLocation) {
+          onLocationSelected: (address, lat, lng) {
             setState(() {
               _pickupAddressController.text = address;
               _pickupLatitude = lat;
               _pickupLongitude = lng;
-              if (distance != null) {
-                _distance = distance;
-                _updatePrice();
-              }
+              _updatePrice();
             });
             _maybeRequestQuote();
           },
-        )).animate().slideY(begin: 0.2).fadeIn(),
+        ).animate(delay: 100.milliseconds).slideY(begin: 0.2).fadeIn(),
+        
+        const SizedBox(height: AppTheme.spacing16),
+        
+        // Delivery Address Input
+        AddressInputField(
+          label: 'Delivery Address', 
+          hintText: 'Enter delivery location',
+          initialAddress: _deliveryAddressController.text,
+          onLocationSelected: (address, lat, lng) {
+            setState(() {
+              _deliveryAddressController.text = address;
+              _deliveryLatitude = lat;
+              _deliveryLongitude = lng;
+              _updatePrice();
+            });
+            _maybeRequestQuote();
+          },
+        ).animate(delay: 150.milliseconds).slideY(begin: 0.2).fadeIn(),
         
         const SizedBox(height: AppTheme.spacing20),
         
@@ -552,18 +619,18 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
           controller: _pickupContactNameController,
           prefixIcon: Icons.person_outline,
           validator: (v) => v?.isEmpty ?? true ? 'Contact name is required' : null,
-        ).animate(delay: 100.milliseconds).slideX(begin: -0.2).fadeIn(),
+        ).animate(delay: 200.milliseconds).slideX(begin: -0.2).fadeIn(),
         
         const SizedBox(height: AppTheme.spacing16),
         
         ModernTextField(
           label: 'Contact Phone',
-          hintText: '+1 (555) 123-4567',
+          hintText: '+639601234567',
           controller: _pickupContactPhoneController,
           keyboardType: TextInputType.phone,
           prefixIcon: Icons.phone_outlined,
           validator: (v) => v?.isEmpty ?? true ? 'Phone number is required' : null,
-        ).animate(delay: 150.milliseconds).slideX(begin: 0.2).fadeIn(),
+        ).animate(delay: 250.milliseconds).slideX(begin: 0.2).fadeIn(),
         
         const SizedBox(height: AppTheme.spacing16),
         
@@ -573,7 +640,7 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
           controller: _pickupInstructionsController,
           prefixIcon: Icons.note_outlined,
           maxLines: 3,
-        ).animate(delay: 200.milliseconds).slideY(begin: 0.2).fadeIn(),
+        ).animate(delay: 300.milliseconds).slideY(begin: 0.2).fadeIn(),
       ],
     );
   }
@@ -583,7 +650,7 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Delivery Details',
+          'Delivery Contact',
           style: GoogleFonts.inter(
             fontSize: 24,
             fontWeight: FontWeight.w800,
@@ -593,7 +660,7 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
         ),
         const SizedBox(height: 8),
         Text(
-          'Where should we deliver your package?',
+          'Who will receive the package?',
           style: GoogleFonts.inter(
             fontSize: 16,
             fontWeight: FontWeight.w500,
@@ -601,46 +668,6 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
           ),
         ),
         const SizedBox(height: AppTheme.spacing24),
-        
-        (Env.mapProvider == 'mapbox'
-            ? MapboxAddressPicker(
-                label: 'Delivery Address',
-                initialAddress: _deliveryAddressController.text,
-                isPickup: false,
-                otherLocation: _pickupLocation,
-                onLocationSelected: (address, lat, lng, distance, otherLocation) {
-                  setState(() {
-                    _deliveryAddressController.text = address;
-                    _deliveryLatitude = lat;
-                    _deliveryLongitude = lng;
-                    if (distance != null) {
-                      _distance = distance;
-                      _updatePrice();
-                    }
-                  });
-                  _maybeRequestQuote();
-                },
-              )
-            : MapAddressPicker(
-          label: 'Delivery Address',
-          initialAddress: _deliveryAddressController.text,
-          isPickup: false,
-          otherLocation: _pickupLocation,
-          onLocationSelected: (address, lat, lng, distance, otherLocation) {
-            setState(() {
-              _deliveryAddressController.text = address;
-              _deliveryLatitude = lat;
-              _deliveryLongitude = lng;
-              if (distance != null) {
-                _distance = distance;
-                _updatePrice();
-              }
-            });
-            _maybeRequestQuote();
-          },
-        )).animate().slideY(begin: 0.2).fadeIn(),
-        
-        const SizedBox(height: AppTheme.spacing20),
         
         ModernTextField(
           label: 'Contact Name',
@@ -654,7 +681,7 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
         
         ModernTextField(
           label: 'Contact Phone',
-          hintText: '+1 (555) 123-4567',
+          hintText: '+639601234567',
           controller: _deliveryContactPhoneController,
           keyboardType: TextInputType.phone,
           prefixIcon: Icons.phone_outlined,
@@ -665,7 +692,7 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
         
         ModernTextField(
           label: 'Special Instructions (Optional)',
-          hintText: 'Building access, floor, etc.',
+          hintText: 'Building access, floor, apartment number, etc.',
           controller: _deliveryInstructionsController,
           prefixIcon: Icons.note_outlined,
           maxLines: 3,
@@ -732,7 +759,7 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
             const SizedBox(width: AppTheme.spacing12),
             Expanded(
               child: ModernTextField(
-                label: 'Value (\$ - Optional)',
+                label: 'Value (₱ - Optional)',
                 hintText: '100.00',
                 controller: _packageValueController,
                 keyboardType: TextInputType.number,
@@ -832,16 +859,16 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text(
-                    '\$${_selectedVehicleType!.basePrice.toStringAsFixed(2)}',
+                    Text(
+                      '₱${_selectedVehicleType!.basePrice.toStringAsFixed(2)}',
                     style: GoogleFonts.inter(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                       color: AppTheme.textPrimary,
                     ),
                   ),
-                  Text(
-                    '\$${(_price! - _selectedVehicleType!.basePrice).toStringAsFixed(2)}',
+                    Text(
+                      '₱${(_price! - _selectedVehicleType!.basePrice).toStringAsFixed(2)}',
                     style: GoogleFonts.inter(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
@@ -866,8 +893,8 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
                   color: AppTheme.textPrimary,
                 ),
               ),
-              Text(
-                '\$${_price!.toStringAsFixed(2)}',
+                Text(
+                  '₱${_price!.toStringAsFixed(2)}',
                 style: GoogleFonts.inter(
                   fontSize: 22,
                   fontWeight: FontWeight.w800,

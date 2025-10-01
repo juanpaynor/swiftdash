@@ -45,12 +45,8 @@ dependencies:
   geolocator: ^14.0.2
   geocoding: ^4.0.0
   flutter_polyline_points: ^3.1.0
-  # Mapbox (feature-flagged)
-  mapbox_gl: ^0.16.0
-
-dependency_overrides:
-  mapbox_gl_web:
-    path: packages/mapbox_gl_web
+  # Official Mapbox Maps SDK
+  mapbox_maps_flutter: ^2.1.0
   
   # Animations & Visuals
   lottie: ^3.2.0
@@ -84,6 +80,7 @@ dependency_overrides:
   
   # Network & Performance
   dio: ^5.7.0
+  http: ^1.1.0
   flutter_cache_manager: ^3.4.1
   connectivity_plus: ^6.0.5
   

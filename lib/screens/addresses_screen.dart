@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../widgets/modern_widgets.dart';
 import '../models/address.dart';
 
 class AddressesScreen extends StatefulWidget {
@@ -64,26 +65,16 @@ class _AddressesScreenState extends State<AddressesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        title: Text(
-          'My Addresses',
-          style: TextStyle(
-            color: Colors.blue[800],
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back, color: Colors.blue[800]),
-          onPressed: () {
-            try {
-              context.pop();
-            } catch (e) {
-              context.go('/home');
-            }
-          },
-        ),
+      appBar: ModernAppBar(
+        title: 'My Addresses',
+        showBackButton: true,
+        onBackPressed: () {
+          try {
+            context.pop();
+          } catch (e) {
+            context.go('/home');
+          }
+        },
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())

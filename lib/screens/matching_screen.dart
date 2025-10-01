@@ -534,7 +534,7 @@ class _MatchingScreenState extends State<MatchingScreen>
                 ),
               ),
               Text(
-                '\$${_delivery!.totalPrice.toStringAsFixed(2)}',
+                '₱${_delivery!.totalPrice.toStringAsFixed(2)}',
                 style: GoogleFonts.inter(
                   fontSize: 20,
                   fontWeight: FontWeight.w800,

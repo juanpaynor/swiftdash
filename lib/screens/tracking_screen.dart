@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import '../models/delivery.dart';
 import '../services/delivery_service.dart';
 import '../services/auth_service.dart';
+import '../widgets/modern_widgets.dart';
 
 class TrackingScreen extends StatefulWidget {
   const TrackingScreen({super.key});
@@ -46,26 +47,16 @@ class _TrackingScreenState extends State<TrackingScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        title: Text(
-          'My Deliveries',
-          style: TextStyle(
-            color: Colors.blue[800],
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back, color: Colors.blue[800]),
-          onPressed: () {
-            if (context.canPop()) {
-              context.pop();
-            } else {
-              context.go('/home');
-            }
-          },
-        ),
+      appBar: ModernAppBar(
+        title: 'My Deliveries',
+        showBackButton: true,
+        onBackPressed: () {
+          if (context.canPop()) {
+            context.pop();
+          } else {
+            context.go('/home');
+          }
+        },
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -213,7 +204,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
                                       ),
                                     ),
                                   Text(
-                                    '\$${delivery.totalPrice.toStringAsFixed(2)}',
+                                    '₱${delivery.totalPrice.toStringAsFixed(2)}',
                                     style: const TextStyle(
                                       fontSize: 16,
                                       fontWeight: FontWeight.bold,

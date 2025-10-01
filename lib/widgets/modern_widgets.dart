@@ -488,60 +488,87 @@ class ModernToast {
     required Color color,
     required Color backgroundColor,
   }) {
-    final overlay = Overlay.of(context);
-    late OverlayEntry overlayEntry;
+    try {
+      final overlay = Overlay.of(context);
+      late OverlayEntry overlayEntry;
 
-    overlayEntry = OverlayEntry(
-      builder: (context) => Positioned(
-        top: MediaQuery.of(context).padding.top + 20,
-        left: 20,
-        right: 20,
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppTheme.spacing20,
-              vertical: AppTheme.spacing16,
-            ),
-            decoration: BoxDecoration(
-              color: backgroundColor,
-              borderRadius: BorderRadius.circular(AppTheme.radius16),
-              border: Border.all(color: color.withOpacity(0.3)),
-              boxShadow: AppTheme.cardShadow,
-            ),
-            child: Row(
-              children: [
-                Icon(icon, color: color, size: 24),
-                const SizedBox(width: AppTheme.spacing12),
-                Expanded(
-                  child: Text(
-                    message,
-                    style: GoogleFonts.inter(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: color,
+      overlayEntry = OverlayEntry(
+        builder: (context) => Positioned(
+          top: MediaQuery.of(context).padding.top + 20,
+          left: 20,
+          right: 20,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppTheme.spacing20,
+                vertical: AppTheme.spacing16,
+              ),
+              decoration: BoxDecoration(
+                color: backgroundColor,
+                borderRadius: BorderRadius.circular(AppTheme.radius16),
+                border: Border.all(color: color.withOpacity(0.3)),
+                boxShadow: AppTheme.cardShadow,
+              ),
+              child: Row(
+                children: [
+                  Icon(icon, color: color, size: 24),
+                  const SizedBox(width: AppTheme.spacing12),
+                  Expanded(
+                    child: Text(
+                      message,
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: color,
+                      ),
                     ),
                   ),
-                ),
+                ],
+              ),
+            )
+                .animate()
+                .slideY(begin: -1.0, end: 0.0, duration: AppTheme.animationMedium)
+                .fadeIn(duration: AppTheme.animationMedium),
+          ),
+        ),
+      );
+
+      overlay.insert(overlayEntry);
+
+      // Auto remove after 3 seconds
+      Future.delayed(const Duration(seconds: 3), () {
+        try {
+          overlayEntry.remove();
+        } catch (_) {}
+      });
+
+      // Add haptic feedback
+      HapticFeedback.lightImpact();
+    } catch (e) {
+      // Fallback: use ScaffoldMessenger if available, otherwise just print
+      try {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(icon, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(child: Text(message)),
               ],
             ),
-          )
-              .animate()
-              .slideY(begin: -1.0, end: 0.0, duration: AppTheme.animationMedium)
-              .fadeIn(duration: AppTheme.animationMedium),
-        ),
-      ),
-    );
-
-    overlay.insert(overlayEntry);
-
-    // Auto remove after 3 seconds
-    Future.delayed(const Duration(seconds: 3), () {
-      overlayEntry.remove();
-    });
-
-    // Add haptic feedback
-    HapticFeedback.lightImpact();
+            backgroundColor: color,
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      } catch (_) {
+        // Last resort: print to console
+        print('Toast: $message');
+      }
+    }
   }
 }
 

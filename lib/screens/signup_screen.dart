@@ -52,11 +52,19 @@ class _SignUpScreenState extends State<SignUpScreen> {
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
-      
+
       if (response.user != null) {
+        // Create user profile in database
+        await AuthService.createUserProfile(
+          userId: response.user!.id,
+          firstName: _nameController.text.trim(),
+          lastName: '',
+          phoneNumber: _phoneController.text.trim(),
+        );
+
         if (!mounted) return;
         HapticFeedback.lightImpact();
-        
+
         // Show success message
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -73,7 +81,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           ),
         );
-        
+
         context.go('/login');
       }
     } catch (e) {

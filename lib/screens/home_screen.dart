@@ -45,6 +45,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _fadeController.forward();
     _slideController.forward();
     _loadRecentDeliveries();
+    // _testEdgeFunctions(); // Commented out - functions not deployed yet
 
     // Subscribe to realtime updates for the current user's deliveries
     final currentUser = Supabase.instance.client.auth.currentUser;
@@ -322,14 +323,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildPromoCarousel() {
     final promoData = [
-      {
-        'title': 'Free Delivery',
-        'subtitle': 'On orders over \$25',
-        'gradient': const LinearGradient(
-          colors: [Color(0xFFFF6B6B), Color(0xFFEE5A24)],
-        ),
-        'icon': Icons.delivery_dining_rounded,
-      },
       {
         'title': 'Express Mode',
         'subtitle': 'Delivery in 30 mins',
@@ -941,7 +934,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               Row(
                 children: [
                   Text(
-                    '\$${delivery.totalPrice.toStringAsFixed(2)}',
+                    '₱${delivery.totalPrice.toStringAsFixed(2)}',
                     style: GoogleFonts.inter(
                       fontSize: 16,
                       fontWeight: FontWeight.w700,
@@ -1061,7 +1054,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       context: context,
                       message: 'Delivery cancelled successfully',
                     );
-                    // Refresh the list immediately
+                    // Force immediate UI refresh by removing the item from the list
+                    setState(() {
+                      _recentDeliveries.removeWhere((d) => d.id == delivery.id);
+                    });
+                    // Also refresh from database to ensure consistency
                     await _loadRecentDeliveries();
                   }
                 } catch (e) {
@@ -1074,7 +1071,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 }
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.errorColor,
+                backgroundColor: AppTheme.primaryBlue,
                 foregroundColor: Colors.white,
                 elevation: 0,
                 shape: RoundedRectangleBorder(

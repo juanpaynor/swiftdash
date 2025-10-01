@@ -2,17 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class AppTheme {
-  // SwiftDash Modern Brand Colors - Inspired by Uber & Lalamove
-  static const Color primaryBlue = Color(0xFF1E40AF);
+  // SwiftDash Brand Colors (from logo)
+  static const Color primaryBlue = Color(0xFF2E4A9B); // Dark blue from 'SD' logo
   static const Color primaryBlueDark = Color(0xFF1E3A8A);
-  static const Color secondaryBlue = Color(0xFF3B82F6);
-  static const Color accentCyan = Color(0xFF06B6D4);
-  static const Color accentTeal = Color(0xFF0D9488);
+  static const Color secondaryBlue = Color(0xFF1DA1F2); // Light blue from 'SD' logo  
+  static const Color accentCyan = Color(0xFF4FC3F7); // Lighter blue accent
+  static const Color accentTeal = Color(0xFF06B6D4);
   
-  // Gradient Colors
-  static const Color gradientStart = Color(0xFF667EEA);
-  static const Color gradientEnd = Color(0xFF764BA2);
-  static const Color gradientAccent = Color(0xFFF093FB);
+  // Gradient Colors - SwiftDash Brand
+  static const Color gradientStart = primaryBlue; // Use SwiftDash dark blue
+  static const Color gradientEnd = secondaryBlue; // Use SwiftDash light blue
+  static const Color gradientAccent = accentCyan;
   
   // Success & Status Colors (Premium palette)
   static const Color successColor = Color(0xFF10B981);

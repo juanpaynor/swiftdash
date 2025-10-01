@@ -6,9 +6,7 @@ class Env {
   static const String _fallbackSupabaseUrl = 'https://lygzxmhskkqrntnmxtbb.supabase.co';
   static const String _fallbackSupabaseAnonKey = 'sb_publishable_AXpznyj7ra4eUoDiYQmqEQ_enUzT-Mc';
   static const String _fallbackGoogleMapsApiKey = 'AIzaSyANfwae0FJo4S8AG74T72n9XoB95y60mQ8';
-  // Mapbox fallback (only used if .env not set). Consider moving to .env for production.
-  static const String _fallbackMapboxAccessToken = '';
-  static const String _fallbackMapboxStyleUrl = 'mapbox://styles/mapbox/streets-v12';
+  static const String _fallbackMapProvider = 'mapbox'; // Default to Mapbox
 
   static String get googleMapsApiKey {
     final envValue = dotenv.env['GOOGLE_MAPS_API_KEY'];
@@ -34,24 +32,13 @@ class Env {
     return kIsWeb ? _fallbackSupabaseAnonKey : '';
   }
 
-  // Map provider flag: 'google' (default) or 'mapbox'
   static String get mapProvider {
-    final v = dotenv.env['MAP_PROVIDER'];
-    if (v != null && v.isNotEmpty) return v.toLowerCase();
-    return 'google';
-  }
-
-  static String get mapboxAccessToken {
-    final envValue = dotenv.env['MAPBOX_ACCESS_TOKEN'];
-    if (envValue != null && envValue.isNotEmpty) return envValue;
-    // If you want to hardcode for quick testing, you can put your token here temporarily.
-    return _fallbackMapboxAccessToken;
-  }
-
-  static String get mapboxStyleUrl {
-    final envValue = dotenv.env['MAPBOX_STYLE_URL'];
-    if (envValue != null && envValue.isNotEmpty) return envValue;
-    return _fallbackMapboxStyleUrl;
+    final envValue = dotenv.env['MAP_PROVIDER'];
+    if (envValue != null && envValue.isNotEmpty) {
+      return envValue;
+    }
+    // Use Google Maps on web since Mapbox Maps Flutter doesn't support web
+    return kIsWeb ? 'google' : _fallbackMapProvider;
   }
 
   /// Loads environment variables from the .env file if present.

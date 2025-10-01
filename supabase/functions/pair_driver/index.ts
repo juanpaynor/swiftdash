@@ -28,10 +28,10 @@ serve(async (req) => {
     const { data: authData, error: authErr } = await supabase.auth.getUser();
     if (authErr || !authData?.user) return new Response("Unauthorized", { status: 401 });
 
-    // For now, just tag the delivery as 'searching' if not already
+    // For now, just tag the delivery as 'pending' if not already
     const { data: updated, error: updErr } = await supabase
       .from('deliveries')
-      .update({ status: 'searching' })
+      .update({ status: 'pending' })
       .eq('id', body.deliveryId)
       .select()
       .single();

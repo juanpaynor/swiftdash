@@ -47,10 +47,7 @@ class AppDrawer extends StatelessWidget {
                       subtitle: 'Update your information',
                       onTap: () {
                         Navigator.pop(context);
-                        ModernToast.info(
-                          context: context,
-                          message: 'Profile editing coming soon!',
-                        );
+                        context.go('/profile');
                       },
                     ).animate(delay: 100.milliseconds).slideX(begin: -0.2).fadeIn(),
                     

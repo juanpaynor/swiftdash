@@ -61,6 +61,8 @@ class VehicleType {
         return Icons.directions_car;
       case 'van':
         return Icons.local_shipping;
+      case 'truck':
+        return Icons.fire_truck; // or Icons.local_shipping if unavailable
       default:
         return Icons.delivery_dining;
     }

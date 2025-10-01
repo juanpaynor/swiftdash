@@ -8,6 +8,7 @@ import 'package:myapp/screens/tracking_screen.dart';
 import 'package:myapp/screens/addresses_screen.dart';
 import 'package:myapp/screens/create_delivery_screen.dart';
 import 'package:myapp/screens/matching_screen.dart';
+import 'package:myapp/screens/profile_edit_screen.dart';
 
 final GoRouter router = GoRouter(
   initialLocation: '/',
@@ -77,6 +78,12 @@ final GoRouter router = GoRouter(
       builder: (BuildContext context, GoRouterState state) {
         final deliveryId = state.pathParameters['deliveryId']!;
         return MatchingScreen(deliveryId: deliveryId);
+      },
+    ),
+    GoRoute(
+      path: '/profile',
+      builder: (BuildContext context, GoRouterState state) {
+        return const ProfileEditScreen();
       },
     ),
   ],
