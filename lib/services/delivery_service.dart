@@ -161,4 +161,43 @@ class DeliveryService {
         })
         .eq('id', deliveryId);
   }
+
+  // Driver location tracking integration
+  static Future<Map<String, dynamic>?> getDriverLocation(String driverId) async {
+    final response = await _supabase
+        .from('driver_profiles')
+        .select('current_latitude, current_longitude, location_updated_at, is_online')
+        .eq('driver_id', driverId)
+        .maybeSingle();
+
+    return response;
+  }
+
+  // Stream delivery updates (real-time)
+  static Stream<Delivery> streamDeliveryUpdates(String deliveryId) {
+    return _supabase
+        .from('deliveries')
+        .stream(primaryKey: ['id'])
+        .eq('id', deliveryId)
+        .map((data) => Delivery.fromJson(data.first));
+  }
+
+  // Stream driver location updates for active delivery
+  static Stream<Map<String, dynamic>?> streamDriverLocation(String driverId) {
+    return _supabase
+        .from('driver_profiles')
+        .stream(primaryKey: ['driver_id'])
+        .eq('driver_id', driverId)
+        .map((data) => data.isNotEmpty ? data.first : null);
+  }
+
+  // Get active deliveries count (for analytics)
+  static Future<int> getActiveDeliveriesCount() async {
+    final response = await _supabase
+        .from('deliveries')
+        .select('id')
+        .inFilter('status', ['pending', 'driver_assigned', 'pickup_arrived', 'package_collected', 'in_transit']);
+
+    return (response as List).length;
+  }
 }

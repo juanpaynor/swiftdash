@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:myapp/router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:myapp/config/env.dart';
@@ -28,6 +29,9 @@ Future<void> main() async {
       url: Env.supabaseUrl,
       anonKey: Env.supabaseAnonKey,
     );
+
+    // Initialize Mapbox with access token
+    MapboxOptions.setAccessToken('pk.eyJ1Ijoic3dpZnRkYXNoIiwiYSI6ImNtZzNiazczczEzZmQycnIwdno1Z2NtYW0ifQ.9zBJVXVCBLU3eN1jZQTJUA');
   } catch (e, st) {
     // Keep the error so we can show a useful UI instead of a white screen
     initError = e.toString();

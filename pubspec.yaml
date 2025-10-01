@@ -46,7 +46,7 @@ dependencies:
   geocoding: ^4.0.0
   flutter_polyline_points: ^3.1.0
   # Official Mapbox Maps SDK
-  mapbox_maps_flutter: ^2.1.0
+  mapbox_maps_flutter: ^2.3.0
   
   # Animations & Visuals
   lottie: ^3.2.0

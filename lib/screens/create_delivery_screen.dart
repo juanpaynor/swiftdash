@@ -31,6 +31,9 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
   int _currentStep = 0;
 
   late AnimationController _animationController;
+  
+  // Map reference for real-time updates
+  final GlobalKey<State<SharedDeliveryMap>> _mapKey = GlobalKey<State<SharedDeliveryMap>>();
 
   // Form controllers
   final _pickupAddressController = TextEditingController();
@@ -202,7 +205,9 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
   }
 
   Future<void> _maybeRequestQuote() async {
-    if (_selectedVehicleType == null || _pickupLocation == null || _deliveryLocation == null) return;
+    if (_selectedVehicleType == null || 
+        _pickupLatitude == null || _pickupLongitude == null ||
+        _deliveryLatitude == null || _deliveryLongitude == null) return;
     try {
       final data = await DeliveryService.getQuote(
         vehicleTypeId: _selectedVehicleType!.id,
@@ -556,6 +561,7 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
         
         // Shared Map (will show both pickup and delivery markers)
         SharedDeliveryMap(
+          key: _mapKey,
           onLocationSelected: (address, lat, lng, isPickup) {
             setState(() {
               if (isPickup) {
@@ -573,6 +579,11 @@ class _CreateDeliveryScreenState extends State<CreateDeliveryScreen>
           },
           initialPickupAddress: _pickupAddressController.text,
           initialDeliveryAddress: _deliveryAddressController.text,
+          // Real-time coordinate updates (Uber-style responsiveness)
+          pickupLatitude: _pickupLatitude,
+          pickupLongitude: _pickupLongitude,
+          deliveryLatitude: _deliveryLatitude,
+          deliveryLongitude: _deliveryLongitude,
         ).animate().slideY(begin: 0.2).fadeIn(),
         
         const SizedBox(height: AppTheme.spacing20),
@@ -1028,14 +1039,62 @@ class ModernVehicleCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      Text(
+                        vehicleType.name,
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      if (vehicleType.description != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          vehicleType.description!,
+                          style: GoogleFonts.inter(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w400,
+                            color: AppTheme.textSecondary,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                      const SizedBox(height: 8),
                       Row(
                         children: [
-                          Text(
-                            vehicleType.name,
-                            style: GoogleFonts.inter(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: AppTheme.textPrimary,
+                          Flexible(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppTheme.infoLight,
+                                borderRadius: BorderRadius.circular(AppTheme.radius8),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.fitness_center,
+                                    size: 12,
+                                    color: AppTheme.infoColor,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Flexible(
+                                    child: Text(
+                                      'Max ${vehicleType.maxWeightKg}kg',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppTheme.infoColor,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                           if (isSelected) ...[
@@ -1061,74 +1120,35 @@ class ModernVehicleCard extends StatelessWidget {
                           ],
                         ],
                       ),
-                      if (vehicleType.description != null) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          vehicleType.description!,
-                          style: GoogleFonts.inter(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w400,
-                            color: AppTheme.textSecondary,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppTheme.infoLight,
-                              borderRadius: BorderRadius.circular(AppTheme.radius8),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  Icons.fitness_center,
-                                  size: 12,
-                                  color: AppTheme.infoColor,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'Max ${vehicleType.maxWeightKg}kg',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppTheme.infoColor,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
                     ],
                   ),
                 ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      '\$${vehicleType.basePrice.toStringAsFixed(2)}',
-                      style: GoogleFonts.inter(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                        color: AppTheme.textPrimary,
+                const SizedBox(width: AppTheme.spacing12),
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '₱${vehicleType.basePrice.toStringAsFixed(0)}',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.textPrimary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                    Text(
-                      '+\$${vehicleType.pricePerKm.toStringAsFixed(2)}/km',
-                      style: GoogleFonts.inter(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: AppTheme.textSecondary,
+                      Text(
+                        '+₱${vehicleType.pricePerKm.toStringAsFixed(0)}/km',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: AppTheme.textSecondary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ],
             ),
