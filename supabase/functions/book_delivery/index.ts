@@ -1,6 +1,6 @@
 // @ts-nocheck
 // Book Delivery Edge Function
-// Validates the request with user JWT, recomputes price, and inserts a delivery row.
+// Validates the request with user JWT, recomputes price with VAT, and inserts a delivery row.
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -25,6 +25,12 @@ function haversineKm(a: LatLng, b: LatLng): number {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+async function getDirectionsDistance(pickup: LatLng, dropoff: LatLng): Promise<number> {
+  // Google Maps API removed - using Haversine distance calculation only
+  console.log("Using Haversine distance calculation (Google Maps removed)");
+  return haversineKm(pickup, dropoff);
 }
 
 serve(async (req) => {
@@ -62,10 +68,17 @@ serve(async (req) => {
     }
     if (!vt || vt.is_active === false) return new Response("Vehicle type unavailable", { status: 400 });
 
-    const distanceKm = Math.max(0, Math.round(haversineKm(body.pickup.location, body.dropoff.location) * 10) / 10);
+    // Get accurate distance using Google Directions API
+    const distanceKm = Math.max(0, Math.round((await getDirectionsDistance(body.pickup.location, body.dropoff.location)) * 10) / 10);
+    
     const base = Number(vt.base_price) || 0;
     const perKm = Number(vt.price_per_km) || 0;
-    const total = Math.max(1, Math.round((base + perKm * distanceKm) * 100) / 100);
+    const subtotal = base + perKm * distanceKm;
+    
+    // Add 12% VAT (Philippine requirement)
+    const vatRate = 0.12;
+    const vat = subtotal * vatRate;
+    const total = Math.max(1, Math.round((subtotal + vat) * 100) / 100);
 
     // Insert delivery (RLS should allow if policies are set for authenticated users)
     const insertPayload: Record<string, unknown> = {

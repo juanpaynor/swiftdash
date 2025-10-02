@@ -1,8 +1,7 @@
 // @ts-nocheck
 // Pricing quote Edge Function
-// Computes distance (Haversine) and price using vehicle_types from DB.
-// You can later swap the distance calc to Google Directions API using a server-side key
-// set via `supabase secrets set GOOGLE_MAPS_API_KEY=...`.
+// Computes distance (Google Directions API) and price using vehicle_types from DB.
+// Includes 12% VAT as required in Philippines
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -22,6 +21,8 @@ interface QuoteResponse {
   base: number;
   perKm: number;
   subtotal: number;
+  vat: number;
+  vatRate: number;
   surgeMultiplier: number;
   total: number;
   currency: string;
@@ -41,6 +42,34 @@ function haversineKm(a: LatLng, b: LatLng): number {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+async function getMapboxDirectionsDistance(pickup: LatLng, dropoff: LatLng): Promise<number> {
+  const mapboxToken = Deno.env.get("MAPBOX_ACCESS_TOKEN");
+  if (!mapboxToken) {
+    console.log("No Mapbox access token, falling back to Haversine distance");
+    return haversineKm(pickup, dropoff);
+  }
+
+  try {
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${pickup.lng},${pickup.lat};${dropoff.lng},${dropoff.lat}?access_token=${mapboxToken}&geometries=geojson`;
+    
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    if (data.routes && data.routes.length > 0) {
+      const distanceMeters = data.routes[0].distance;
+      const distanceKm = distanceMeters / 1000;
+      console.log(`Mapbox Directions distance: ${distanceKm} km`);
+      return distanceKm;
+    } else {
+      console.log(`Mapbox Directions API error, falling back to Haversine`);
+      return haversineKm(pickup, dropoff);
+    }
+  } catch (error) {
+    console.error("Error calling Mapbox Directions API:", error);
+    return haversineKm(pickup, dropoff);
+  }
 }
 
 serve(async (req) => {
@@ -79,23 +108,33 @@ serve(async (req) => {
       return new Response("Vehicle type unavailable", { status: 400 });
     }
 
-    const distanceRaw = haversineKm(body.pickup, body.dropoff);
+    // Get accurate distance using Mapbox Directions API
+    const distanceRaw = await getMapboxDirectionsDistance(body.pickup, body.dropoff);
     const distanceKm = Math.max(0, Math.round(distanceRaw * 10) / 10);
 
     const base = Number(vt.base_price) || 0;
     const perKm = Number(vt.price_per_km) || 0;
     const subtotal = base + perKm * distanceKm;
+    
+    // Apply surge pricing if provided
     const surge = body.surge && body.surge > 0 ? body.surge : 1;
-    const total = Math.max(1, Math.round(subtotal * surge * 100) / 100);
+    const afterSurge = subtotal * surge;
+    
+    // Add 12% VAT (Philippine requirement)
+    const vatRate = 0.12;
+    const vat = afterSurge * vatRate;
+    const total = Math.max(1, Math.round((afterSurge + vat) * 100) / 100);
 
     const resp: QuoteResponse = {
       distanceKm,
       base,
       perKm,
       subtotal: Math.round(subtotal * 100) / 100,
+      vat: Math.round(vat * 100) / 100,
+      vatRate,
       surgeMultiplier: surge,
       total,
-      currency: "USD",
+      currency: "PHP", // Philippine Peso
       quoteId: crypto.randomUUID(),
       vehicleTypeId: body.vehicleTypeId,
       expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),

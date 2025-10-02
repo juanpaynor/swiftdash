@@ -1,5 +1,6 @@
 name: myapp
-description: "A new Flutter project."
+description: "A new Flutter pr  # Google Maps removed - using Mapbox only
+  geolocator: ^13.0.1ect."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -40,8 +41,8 @@ dependencies:
   supabase_flutter: ^2.5.2
   flutter_dotenv: ^6.0.0
   
-  # Maps & Location
-  google_maps_flutter: ^2.13.1
+  # Maps & Location (Google Maps removed - using Mapbox only)
+  # google_maps_flutter: ^2.13.1  # REMOVED
   geolocator: ^14.0.2
   geocoding: ^4.0.0
   flutter_polyline_points: ^3.1.0

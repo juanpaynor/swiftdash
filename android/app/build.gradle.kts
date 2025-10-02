@@ -46,7 +46,7 @@ android {
         
         // Get Maps API key from local.properties
         val properties = loadProperties(project.rootProject.file("local.properties"))
-        manifestPlaceholders["GOOGLE_MAPS_API_KEY"] = properties.getProperty("GOOGLE_MAPS_API_KEY", "")
+        // Google Maps API key removed - using Mapbox only
     }
 
     buildTypes {

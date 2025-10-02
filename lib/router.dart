@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:myapp/models/vehicle_type.dart';
 import 'package:myapp/screens/home_screen.dart';
 import 'package:myapp/screens/login_screen.dart';
 import 'package:myapp/screens/signup_screen.dart';
 import 'package:myapp/screens/tracking_screen.dart';
 import 'package:myapp/screens/addresses_screen.dart';
-import 'package:myapp/screens/create_delivery_screen.dart';
+import 'package:myapp/screens/vehicle_selection_screen.dart';
+import 'package:myapp/screens/location_selection_screen.dart';
+import 'package:myapp/screens/order_summary_screen.dart';
 import 'package:myapp/screens/matching_screen.dart';
 import 'package:myapp/screens/profile_edit_screen.dart';
 
@@ -70,7 +73,21 @@ final GoRouter router = GoRouter(
     GoRoute(
       path: '/create-delivery',
       builder: (BuildContext context, GoRouterState state) {
-        return const CreateDeliveryScreen();
+        return const VehicleSelectionScreen();
+      },
+    ),
+    GoRoute(
+      path: '/location-selection',
+      builder: (BuildContext context, GoRouterState state) {
+        final vehicleType = state.extra as VehicleType;
+        return LocationSelectionScreen(selectedVehicleType: vehicleType);
+      },
+    ),
+    GoRoute(
+      path: '/order-summary',
+      builder: (BuildContext context, GoRouterState state) {
+        final orderData = state.extra as Map<String, dynamic>;
+        return OrderSummaryScreen(orderData: orderData);
       },
     ),
     GoRoute(

@@ -47,9 +47,24 @@ class VehicleType {
     };
   }
 
-  // Calculate price for a given distance
+  // Calculate price for a given distance (including 12% VAT)
   double calculatePrice(double distanceKm) {
+    final subtotal = basePrice + (pricePerKm * distanceKm);
+    const vatRate = 0.12; // 12% VAT for Philippines
+    final vat = subtotal * vatRate;
+    return subtotal + vat;
+  }
+
+  // Calculate price without VAT
+  double calculatePriceBeforeVAT(double distanceKm) {
     return basePrice + (pricePerKm * distanceKm);
+  }
+
+  // Calculate VAT amount
+  double calculateVAT(double distanceKm) {
+    final subtotal = calculatePriceBeforeVAT(distanceKm);
+    const vatRate = 0.12;
+    return subtotal * vatRate;
   }
 
   // Get icon based on vehicle type

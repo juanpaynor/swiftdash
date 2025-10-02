@@ -25,7 +25,6 @@ class _MatchingScreenState extends State<MatchingScreen>
     with TickerProviderStateMixin {
   late AnimationController _pulseController;
   late AnimationController _searchController;
-  late AnimationController _progressController;
   
   Delivery? _delivery;
   String _currentMessage = "Looking for available drivers...";
@@ -53,14 +52,8 @@ class _MatchingScreenState extends State<MatchingScreen>
       vsync: this,
     )..repeat();
     
-    _progressController = AnimationController(
-      duration: const Duration(seconds: 15), // Total estimated matching time
-      vsync: this,
-    );
-    
     _loadDeliveryDetails();
     _startSearchAnimation();
-    _progressController.forward();
     
     // Listen for delivery updates
     _listenForDriverMatch();
@@ -70,7 +63,6 @@ class _MatchingScreenState extends State<MatchingScreen>
   void dispose() {
     _pulseController.dispose();
     _searchController.dispose();
-    _progressController.dispose();
     super.dispose();
   }
 
@@ -257,11 +249,6 @@ class _MatchingScreenState extends State<MatchingScreen>
                       
                       const SizedBox(height: AppTheme.spacing40),
                       
-                      // Progress indicator
-                      _buildProgressIndicator(),
-                      
-                      const SizedBox(height: AppTheme.spacing40),
-                      
                       // Delivery summary
                       if (_delivery != null) _buildDeliverySummary(),
                       
@@ -403,52 +390,6 @@ class _MatchingScreenState extends State<MatchingScreen>
         ).animate(delay: 200.milliseconds).fadeIn(),
       ],
     );
-  }
-
-  Widget _buildProgressIndicator() {
-    return Column(
-      children: [
-        Container(
-          height: 6,
-          decoration: BoxDecoration(
-            color: AppTheme.dividerColor,
-            borderRadius: BorderRadius.circular(3),
-          ),
-          child: AnimatedBuilder(
-            animation: _progressController,
-            builder: (context, child) {
-              return FractionallySizedBox(
-                alignment: Alignment.centerLeft,
-                widthFactor: _progressController.value,
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: AppTheme.primaryGradient,
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        
-        const SizedBox(height: AppTheme.spacing12),
-        
-        AnimatedBuilder(
-          animation: _progressController,
-          builder: (context, child) {
-            final percentage = (_progressController.value * 100).round();
-            return Text(
-              '$percentage% Complete',
-              style: GoogleFonts.inter(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: AppTheme.primaryBlue,
-              ),
-            );
-          },
-        ),
-      ],
-    ).animate().fadeIn().slideY(begin: 0.2);
   }
 
   Widget _buildDeliverySummary() {

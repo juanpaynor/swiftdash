@@ -76,9 +76,14 @@ serve(async (req: Request) => {
       // Fallback to simple query without PostGIS if function doesn't exist
       const { data: fallbackDrivers, error: fallbackErr } = await supabase
         .from('driver_profiles')
-        .select('driver_id, current_latitude, current_longitude, is_online, is_available, location_updated_at')
+        .select(`
+          driver_id, current_latitude, current_longitude, is_online, is_available, 
+          location_updated_at, is_verified, name, profile_picture_url, 
+          vehicle_model, ltfrb_number, rating, total_rides
+        `)
         .eq('is_online', true)
         .eq('is_available', true)
+        .eq('is_verified', true) // Only verified drivers
         .not('current_latitude', 'is', null)
         .not('current_longitude', 'is', null)
         .limit(10);
@@ -169,7 +174,81 @@ async function assignDriverToDelivery(supabase: any, deliveryId: string, driverI
     throw error;
   }
   
+  // Set driver as unavailable while on delivery
+  await supabase
+    .from('driver_profiles')
+    .update({ is_available: false })
+    .eq('driver_id', driverId);
+  
   console.log(`Successfully assigned driver ${driverId} to delivery ${deliveryId}`);
+}
+
+// Record earnings when delivery is completed (called from delivery status updates)
+async function recordDeliveryEarnings(supabase: any, deliveryId: string) {
+  try {
+    // Get delivery details with vehicle type pricing
+    const { data: deliveryData, error: deliveryError } = await supabase
+      .from('deliveries')
+      .select(`
+        driver_id, total_price, distance_km, vehicle_type_id,
+        vehicle_types!inner(base_price, price_per_km)
+      `)
+      .eq('id', deliveryId)
+      .single();
+
+    if (deliveryError || !deliveryData) {
+      console.error('Error fetching delivery for earnings:', deliveryError);
+      return;
+    }
+
+    const baseEarnings = deliveryData.vehicle_types.base_price;
+    const distanceEarnings = deliveryData.distance_km * deliveryData.vehicle_types.price_per_km;
+    const totalEarnings = baseEarnings + distanceEarnings;
+
+    // Record earnings
+    const { error: earningsError } = await supabase
+      .from('driver_earnings')
+      .insert({
+        driver_id: deliveryData.driver_id,
+        delivery_id: deliveryId,
+        base_earnings: baseEarnings,
+        distance_earnings: distanceEarnings,
+        surge_earnings: 0, // TODO: Add surge pricing logic if needed
+        tips: 0, // Customer can add tips later
+        total_earnings: totalEarnings,
+        earnings_date: new Date().toISOString().split('T')[0]
+      });
+
+    if (earningsError) {
+      console.error('Error recording driver earnings:', earningsError);
+    } else {
+      console.log(`Recorded ₱${totalEarnings} earnings for driver ${deliveryData.driver_id}`);
+    }
+
+    // Set driver as available again
+    await supabase
+      .from('driver_profiles')
+      .update({ is_available: true })
+      .eq('driver_id', deliveryData.driver_id);
+
+    // Trigger tip prompt for customer
+    await supabase
+      .from('delivery_events')
+      .insert({
+        delivery_id: deliveryId,
+        customer_id: deliveryData.customer_id,
+        driver_id: deliveryData.driver_id,
+        event_type: 'tip_prompt',
+        event_data: {
+          delivery_total: totalEarnings,
+          driver_name: deliveryData.driver_name || 'Your driver'
+        },
+        processed: false
+      });
+
+  } catch (error) {
+    console.error('Error in recordDeliveryEarnings:', error);
+  }
 }
 
 // Haversine formula for distance calculation (fallback)

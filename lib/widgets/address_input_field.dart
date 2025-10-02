@@ -1,5 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import '../services/mapbox_service.dart';
+import '../services/hybrid_address_service.dart'; // NEW: Use hybrid service
 import '../constants/app_theme.dart';
 
 class AddressInputField extends StatefulWidget {
@@ -7,6 +8,7 @@ class AddressInputField extends StatefulWidget {
   final String hintText;
   final String? initialAddress;
   final Function(String address, double lat, double lng)? onLocationSelected;
+  final Function(UnifiedDeliveryAddress)? onDeliveryAddressSelected; // UPDATED: Use unified model
   final IconData icon;
 
   const AddressInputField({
@@ -15,6 +17,7 @@ class AddressInputField extends StatefulWidget {
     required this.hintText,
     this.initialAddress,
     this.onLocationSelected,
+    this.onDeliveryAddressSelected, // NEW: Optional callback for exact delivery address
     this.icon = Icons.location_on,
   });
 
@@ -24,9 +27,10 @@ class AddressInputField extends StatefulWidget {
 
 class _AddressInputFieldState extends State<AddressInputField> {
   final TextEditingController _controller = TextEditingController();
-  List<MapboxGeocodeSuggestion> _suggestions = [];
+  List<UnifiedAddressSuggestion> _suggestions = []; // UPDATED: Use unified suggestions
   bool _isSearching = false;
   bool _showSuggestions = false;
+  Timer? _debounceTimer; // OPTIMIZATION: Add debouncing
 
   @override
   void initState() {
@@ -37,10 +41,14 @@ class _AddressInputFieldState extends State<AddressInputField> {
   @override
   void dispose() {
     _controller.dispose();
+    _debounceTimer?.cancel(); // Clean up timer
     super.dispose();
   }
 
-  void _onSearchChanged(String value) async {
+  void _onSearchChanged(String value) {
+    // OPTIMIZATION: Cancel previous timer to debounce API calls
+    _debounceTimer?.cancel();
+    
     if (value.length < 3) {
       setState(() {
         _suggestions = [];
@@ -55,32 +63,68 @@ class _AddressInputFieldState extends State<AddressInputField> {
       _showSuggestions = true;
     });
 
-    try {
-      final suggestions = await MapboxService.getAddressSuggestions(value);
-      setState(() {
-        _suggestions = suggestions;
-        _isSearching = false;
-      });
-    } catch (e) {
-      setState(() {
-        _isSearching = false;
-      });
-    }
+    // OPTIMIZATION: Wait 500ms before making API call (debouncing)
+    _debounceTimer = Timer(const Duration(milliseconds: 500), () async {
+      if (!mounted) return;
+      
+      try {
+        final suggestions = await HybridAddressService.getAddressSuggestions(value); // UPDATED: Use hybrid service
+        if (mounted) {
+          setState(() {
+            _suggestions = suggestions;
+            _isSearching = false;
+          });
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _isSearching = false;
+          });
+        }
+      }
+    });
   }
 
-  void _selectSuggestion(MapboxGeocodeSuggestion suggestion) {
+  void _selectSuggestion(UnifiedAddressSuggestion suggestion) async { // UPDATED: Use unified suggestion
     setState(() {
       _controller.text = suggestion.displayName;
       _suggestions = [];
       _showSuggestions = false;
     });
 
-    // Notify parent about the selected location
+    // Notify parent about the selected location (basic callback)
     widget.onLocationSelected?.call(
       suggestion.displayName,
       suggestion.latitude,
       suggestion.longitude,
     );
+
+    // NEW: Get exact delivery address details if callback is provided
+    if (widget.onDeliveryAddressSelected != null) {
+      try {
+        setState(() => _isSearching = true);
+        
+        // Get precise delivery address details using hybrid service
+        final deliveryAddress = await HybridAddressService.getExactDeliveryAddress(suggestion); // UPDATED: Use hybrid service
+        
+        if (deliveryAddress != null && mounted) {
+          widget.onDeliveryAddressSelected!(deliveryAddress);
+          
+          // Update the display with more precise address if available
+          if (deliveryAddress.deliveryLabel.isNotEmpty) {
+            setState(() {
+              _controller.text = deliveryAddress.deliveryLabel;
+            });
+          }
+        }
+      } catch (e) {
+        print('Error getting exact delivery address: $e');
+      } finally {
+        if (mounted) {
+          setState(() => _isSearching = false);
+        }
+      }
+    }
   }
 
   void _clearInput() {
@@ -161,16 +205,28 @@ class _AddressInputFieldState extends State<AddressInputField> {
               itemCount: _suggestions.length,
               itemBuilder: (context, index) {
                 final suggestion = _suggestions[index];
+                
                 return ListTile(
                   leading: Icon(
-                    Icons.location_on,
+                    _getIconForSuggestion(suggestion),
                     color: AppTheme.primaryBlue,
                     size: 20,
                   ),
                   title: Text(
-                    suggestion.displayName,
+                    suggestion.mainText ?? suggestion.displayName,
                     style: const TextStyle(fontSize: 14),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
+                  subtitle: suggestion.secondaryText != null && suggestion.secondaryText!.isNotEmpty
+                      ? Text(
+                          suggestion.secondaryText!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade600,
+                          ),
+                        )
+                      : null,
                   onTap: () => _selectSuggestion(suggestion),
                   dense: true,
                 );
@@ -179,5 +235,23 @@ class _AddressInputFieldState extends State<AddressInputField> {
           ),
       ],
     );
+  }
+
+  /// UPDATED: Get appropriate icon based on suggestion type
+  IconData _getIconForSuggestion(UnifiedAddressSuggestion suggestion) {
+    final iconType = suggestion.iconType;
+    
+    switch (iconType) {
+      case 'business':
+        return Icons.business;
+      case 'road':
+        return Icons.route;
+      case 'intersection':
+        return Icons.traffic;
+      case 'home':
+        return Icons.home;
+      default:
+        return Icons.location_on;
+    }
   }
 }

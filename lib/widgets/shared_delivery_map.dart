@@ -419,14 +419,6 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> {
 
   @override
   Widget build(BuildContext context) {
-    // Make map responsive to screen size
-    final screenHeight = MediaQuery.of(context).size.height;
-    final mapHeight = screenHeight * 0.4; // 40% of screen height
-    final minHeight = 250.0; // Minimum height for usability
-    final maxHeight = 450.0; // Maximum height to leave space for other content
-    
-    final responsiveHeight = mapHeight.clamp(minHeight, maxHeight);
-    
     return Column(
       children: [
         // Map interaction instructions
@@ -455,25 +447,26 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> {
           ),
         ),
         
-        // Interactive Map
-        Container(
-          height: responsiveHeight,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey.shade300),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: MapWidget(
-              key: const ValueKey("shared_delivery_map"),
-              onMapCreated: _onMapCreated,
-              onTapListener: _onMapTapped,
-              cameraOptions: CameraOptions(
-                center: Point(coordinates: Position(
-                  MapboxService.metroManilaLng, 
-                  MapboxService.metroManilaLat
-                )),
-                zoom: 12.0,
+        // Interactive Map - EXPANDED TO FILL AVAILABLE SPACE
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: MapWidget(
+                key: const ValueKey("shared_delivery_map"),
+                onMapCreated: _onMapCreated,
+                onTapListener: _onMapTapped,
+                cameraOptions: CameraOptions(
+                  center: Point(coordinates: Position(
+                    MapboxService.metroManilaLng, 
+                    MapboxService.metroManilaLat
+                  )),
+                  zoom: 12.0,
+                ),
               ),
             ),
           ),

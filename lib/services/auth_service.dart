@@ -9,6 +9,9 @@ class AuthService {
   // Check if user is authenticated
   static bool get isAuthenticated => currentUser != null;
 
+  // Get current access token
+  static String? get accessToken => _supabase.auth.currentSession?.accessToken;
+
   // Sign in with email and password
   static Future<AuthResponse> signInWithPassword({
     required String email,

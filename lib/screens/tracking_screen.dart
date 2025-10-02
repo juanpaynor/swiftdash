@@ -5,6 +5,7 @@ import '../models/delivery.dart';
 import '../services/delivery_service.dart';
 import '../services/auth_service.dart';
 import '../widgets/modern_widgets.dart';
+import '../widgets/live_tracking_map.dart';
 
 class TrackingScreen extends StatefulWidget {
   final String? deliveryId;
@@ -84,6 +85,8 @@ class _TrackingScreenState extends State<TrackingScreen> {
     _driverLocationSubscription = DeliveryService.streamDriverLocation(driverId)
         .listen((location) {
       setState(() => _driverLocation = location);
+      // Note: LiveTrackingMap will automatically update when driver location changes
+      // due to the setState triggering a rebuild with new _driverLocation
     });
   }
 
@@ -306,39 +309,24 @@ class _TrackingScreenState extends State<TrackingScreen> {
           const SizedBox(height: 16),
         ],
 
-        // Map placeholder (could integrate SharedDeliveryMap here later)
+        // Live Tracking Map
         Expanded(
           child: Container(
             margin: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.grey.shade100,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey.shade300),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
             ),
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.map_outlined, size: 64, color: Colors.grey.shade400),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Live Map View',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey.shade600,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Track your delivery in real-time',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey.shade500,
-                    ),
-                  ),
-                ],
-              ),
+            clipBehavior: Clip.antiAlias,
+            child: LiveTrackingMap(
+              delivery: delivery,
+              driverLocation: _driverLocation,
             ),
           ),
         ),

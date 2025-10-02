@@ -43,11 +43,11 @@ class AppDrawer extends StatelessWidget {
                     _buildMenuItem(
                       context,
                       icon: Icons.person_outline_rounded,
-                      title: 'Edit Profile',
-                      subtitle: 'Update your information',
+                      title: 'View Profile',
+                      subtitle: 'View and edit your profile',
                       onTap: () {
                         Navigator.pop(context);
-                        context.go('/profile');
+                        context.go('/profile-edit');
                       },
                     ).animate(delay: 100.milliseconds).slideX(begin: -0.2).fadeIn(),
                     
@@ -55,78 +55,14 @@ class AppDrawer extends StatelessWidget {
                     
                     _buildMenuItem(
                       context,
-                      icon: Icons.history_rounded,
-                      title: 'Order History',
-                      subtitle: 'View past deliveries',
+                      icon: Icons.settings_outlined,
+                      title: 'Account Settings',
+                      subtitle: 'Manage your account preferences',
                       onTap: () {
                         Navigator.pop(context);
-                        ModernToast.info(
-                          context: context,
-                          message: 'Order history coming soon!',
-                        );
+                        _showAccountSettings(context);
                       },
                     ).animate(delay: 150.milliseconds).slideX(begin: -0.2).fadeIn(),
-                    
-                    const SizedBox(height: AppTheme.spacing8),
-                    
-                    _buildMenuItem(
-                      context,
-                      icon: Icons.location_on_outlined,
-                      title: 'Saved Addresses',
-                      subtitle: 'Manage your addresses',
-                      onTap: () {
-                        Navigator.pop(context);
-                        context.go('/addresses');
-                      },
-                    ).animate(delay: 200.milliseconds).slideX(begin: -0.2).fadeIn(),
-                    
-                    const SizedBox(height: AppTheme.spacing8),
-                    
-                    _buildMenuItem(
-                      context,
-                      icon: Icons.payment_outlined,
-                      title: 'Payment Methods',
-                      subtitle: 'Manage payment options',
-                      onTap: () {
-                        Navigator.pop(context);
-                        ModernToast.info(
-                          context: context,
-                          message: 'Payment settings coming soon!',
-                        );
-                      },
-                    ).animate(delay: 250.milliseconds).slideX(begin: -0.2).fadeIn(),
-                    
-                    const SizedBox(height: AppTheme.spacing8),
-                    
-                    _buildMenuItem(
-                      context,
-                      icon: Icons.notifications_outlined,
-                      title: 'Notifications',
-                      subtitle: 'Manage notifications',
-                      onTap: () {
-                        Navigator.pop(context);
-                        ModernToast.info(
-                          context: context,
-                          message: 'Notification settings coming soon!',
-                        );
-                      },
-                    ).animate(delay: 300.milliseconds).slideX(begin: -0.2).fadeIn(),
-                    
-                    const SizedBox(height: AppTheme.spacing8),
-                    
-                    _buildMenuItem(
-                      context,
-                      icon: Icons.help_outline_rounded,
-                      title: 'Help & Support',
-                      subtitle: 'Get help with your orders',
-                      onTap: () {
-                        Navigator.pop(context);
-                        ModernToast.info(
-                          context: context,
-                          message: 'Support chat coming soon!',
-                        );
-                      },
-                    ).animate(delay: 350.milliseconds).slideX(begin: -0.2).fadeIn(),
                     
                     const SizedBox(height: AppTheme.spacing20),
                     
@@ -143,7 +79,7 @@ class AppDrawer extends StatelessWidget {
                           ],
                         ),
                       ),
-                    ).animate(delay: 400.milliseconds).scaleX(),
+                    ).animate(delay: 200.milliseconds).scaleX(),
                     
                     _buildMenuItem(
                       context,
@@ -152,7 +88,7 @@ class AppDrawer extends StatelessWidget {
                       subtitle: 'Sign out of your account',
                       isDestructive: true,
                       onTap: () => _showSignOutConfirmation(context),
-                    ).animate(delay: 450.milliseconds).slideX(begin: -0.2).fadeIn(),
+                    ).animate(delay: 250.milliseconds).slideX(begin: -0.2).fadeIn(),
                   ],
                 ),
               ),
@@ -463,6 +399,186 @@ class AppDrawer extends StatelessWidget {
             ),
           ],
         );
+      },
+    );
+  }
+
+  void _showAccountSettings(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.7,
+        decoration: const BoxDecoration(
+          color: AppTheme.surfaceColor,
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(AppTheme.radius28),
+          ),
+        ),
+        child: Column(
+          children: [
+            // Handle bar
+            Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(top: AppTheme.spacing12),
+              decoration: BoxDecoration(
+                color: AppTheme.dividerColor,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            
+            // Header
+            Padding(
+              padding: const EdgeInsets.all(AppTheme.spacing20),
+              child: Row(
+                children: [
+                  Text(
+                    'Account Settings',
+                    style: GoogleFonts.inter(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            
+            // Settings options
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(horizontal: AppTheme.spacing20),
+                children: [
+                  _buildSettingsItem(
+                    context,
+                    icon: Icons.notifications_outlined,
+                    title: 'Notifications',
+                    subtitle: 'Manage push notifications',
+                    onTap: () {
+                      ModernToast.info(
+                        context: context,
+                        message: 'Notification settings coming soon!',
+                      );
+                    },
+                  ),
+                  
+                  _buildSettingsItem(
+                    context,
+                    icon: Icons.security_outlined,
+                    title: 'Privacy & Security',
+                    subtitle: 'Manage your privacy settings',
+                    onTap: () {
+                      ModernToast.info(
+                        context: context,
+                        message: 'Privacy settings coming soon!',
+                      );
+                    },
+                  ),
+                  
+                  _buildSettingsItem(
+                    context,
+                    icon: Icons.language_outlined,
+                    title: 'Language',
+                    subtitle: 'English (Philippines)',
+                    onTap: () {
+                      ModernToast.info(
+                        context: context,
+                        message: 'Language selection coming soon!',
+                      );
+                    },
+                  ),
+                  
+                  _buildSettingsItem(
+                    context,
+                    icon: Icons.help_outline_rounded,
+                    title: 'Help & Support',
+                    subtitle: 'Get help and contact support',
+                    onTap: () {
+                      ModernToast.info(
+                        context: context,
+                        message: 'Support chat coming soon!',
+                      );
+                    },
+                  ),
+                  
+                  _buildSettingsItem(
+                    context,
+                    icon: Icons.info_outline_rounded,
+                    title: 'About SwiftDash',
+                    subtitle: 'Version 1.0.0',
+                    onTap: () {
+                      showAboutDialog(
+                        context: context,
+                        applicationName: 'SwiftDash',
+                        applicationVersion: '1.0.0',
+                        applicationLegalese: '© 2025 SwiftDash. All rights reserved.',
+                        children: [
+                          const Text('Lightning Fast • Ultra Reliable\nPremium Delivery Experience'),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsItem(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: AppTheme.primaryBlue.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(AppTheme.radius12),
+        ),
+        child: Icon(
+          icon,
+          color: AppTheme.primaryBlue,
+          size: 20,
+        ),
+      ),
+      title: Text(
+        title,
+        style: GoogleFonts.inter(
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          color: AppTheme.textPrimary,
+        ),
+      ),
+      subtitle: Text(
+        subtitle,
+        style: GoogleFonts.inter(
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+          color: AppTheme.textSecondary,
+        ),
+      ),
+      trailing: const Icon(
+        Icons.chevron_right_rounded,
+        color: AppTheme.textTertiary,
+        size: 20,
+      ),
+      onTap: () {
+        HapticFeedback.lightImpact();
+        onTap();
       },
     );
   }

@@ -104,13 +104,18 @@ class DeliveryService {
     return (res.data as Map<String, dynamic>);
   }
 
-  // Get user's deliveries
-  static Future<List<Delivery>> getUserDeliveries(String userId) async {
-    final response = await _supabase
+  // Get user's deliveries (excluding cancelled ones for recent activity)
+  static Future<List<Delivery>> getUserDeliveries(String userId, {bool excludeCancelled = true}) async {
+    var query = _supabase
         .from('deliveries')
         .select()
-        .eq('customer_id', userId)
-        .order('created_at', ascending: false);
+        .eq('customer_id', userId);
+    
+    if (excludeCancelled) {
+      query = query.neq('status', 'cancelled');
+    }
+    
+    final response = await query.order('created_at', ascending: false);
 
     return (response as List)
         .map((delivery) => Delivery.fromJson(delivery))
@@ -148,6 +153,14 @@ class DeliveryService {
           'status': 'cancelled',
           'updated_at': DateTime.now().toIso8601String()
         })
+        .eq('id', deliveryId);
+  }
+
+  // Delete delivery completely
+  static Future<void> deleteDelivery(String deliveryId) async {
+    await _supabase
+        .from('deliveries')
+        .delete()
         .eq('id', deliveryId);
   }
 

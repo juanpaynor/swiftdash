@@ -29,6 +29,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool _isLoadingDeliveries = true;
   RealtimeChannel? _deliveriesChannel;
   StreamSubscription<List<Map<String, dynamic>>>? _deliveriesSub;
+  
+  // Add GlobalKey for Scaffold to properly control drawer
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
@@ -88,7 +91,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     try {
       final user = Supabase.instance.client.auth.currentUser;
       if (user != null) {
-        final deliveries = await DeliveryService.getUserDeliveries(user.id);
+        final deliveries = await DeliveryService.getUserDeliveries(user.id, excludeCancelled: true);
         setState(() {
           _recentDeliveries = deliveries.take(3).toList(); // Show only latest 3
           _isLoadingDeliveries = false;
@@ -119,6 +122,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     user?.email?.split('@')[0] ?? 'User';
 
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: AppTheme.backgroundColor,
       drawer: const AppDrawer(),
       body: SafeArea(
@@ -175,7 +179,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               GestureDetector(
                 onTap: () {
                   HapticFeedback.lightImpact();
-                  Scaffold.of(context).openDrawer();
+                  _scaffoldKey.currentState?.openDrawer();
                 },
                 child: Container(
                   width: 50,
@@ -323,14 +327,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildPromoCarousel() {
     final promoData = [
-      {
-        'title': 'Express Mode',
-        'subtitle': 'Delivery in 30 mins',
-        'gradient': const LinearGradient(
-          colors: [Color(0xFF4834D4), Color(0xFF667EEA)],
-        ),
-        'icon': Icons.flash_on_rounded,
-      },
       {
         'title': 'Track Live',
         'subtitle': 'Real-time updates',
@@ -500,9 +496,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 child: _buildQuickActionCard(
                   'My Addresses',
                   Icons.location_city_rounded,
-                  const LinearGradient(
-                    colors: [Color(0xFFFF6B6B), Color(0xFFEE5A24)],
-                  ),
+                  AppTheme.primaryGradient, // Changed from red to blue gradient
                   () {
                     HapticFeedback.lightImpact();
                     context.go('/addresses');
@@ -959,6 +953,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           ),
                         ),
                       ),
+                    )
+                  else if (delivery.status == 'delivered' || delivery.status == 'cancelled')
+                    Padding(
+                      padding: const EdgeInsets.only(left: AppTheme.spacing8),
+                      child: GestureDetector(
+                        onTap: () => _showDeleteDeliveryDialog(delivery),
+                        child: Container(
+                          padding: const EdgeInsets.all(AppTheme.spacing4),
+                          decoration: BoxDecoration(
+                            color: AppTheme.errorLight,
+                            borderRadius: BorderRadius.circular(AppTheme.radius4),
+                          ),
+                          child: const Icon(
+                            Icons.delete_outline_rounded,
+                            size: 16,
+                            color: AppTheme.errorColor,
+                          ),
+                        ),
+                      ),
                     ),
                 ],
               ),
@@ -1080,6 +1093,112 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
               child: Text(
                 'Cancel Delivery',
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showDeleteDeliveryDialog(Delivery delivery) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: AppTheme.surfaceColor,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppTheme.radius20),
+          ),
+          title: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppTheme.errorLight,
+                  borderRadius: BorderRadius.circular(AppTheme.radius12),
+                ),
+                child: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: AppTheme.errorColor,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: AppTheme.spacing12),
+              Text(
+                'Delete Delivery',
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            'Are you sure you want to permanently delete this delivery record? This action cannot be undone.',
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: AppTheme.textSecondary,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                'Keep Record',
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                
+                try {
+                  await DeliveryService.deleteDelivery(delivery.id);
+                  
+                  if (mounted) {
+                    HapticFeedback.mediumImpact();
+                    ModernToast.success(
+                      context: context,
+                      message: 'Delivery record deleted successfully',
+                    );
+                    // Force immediate UI refresh by removing the item from the list
+                    setState(() {
+                      _recentDeliveries.removeWhere((d) => d.id == delivery.id);
+                    });
+                    // Also refresh from database to ensure consistency
+                    await _loadRecentDeliveries();
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ModernToast.error(
+                      context: context,
+                      message: 'Error deleting delivery: $e',
+                    );
+                  }
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.errorColor,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppTheme.radius12),
+                ),
+              ),
+              child: Text(
+                'Delete Permanently',
                 style: GoogleFonts.inter(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,

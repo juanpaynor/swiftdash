@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
+// Google Maps removed - using Mapbox only
 import '../services/mapbox_service.dart';
 import '../constants/app_theme.dart';
 
@@ -8,8 +8,9 @@ class MapboxAddressPicker extends StatefulWidget {
   final String label;
   final String? initialAddress;
   final bool isPickup;
-  final Function(String address, double lat, double lng, double? distance, gmaps.LatLng? otherLocation)? onLocationSelected;
-  final gmaps.LatLng? otherLocation;
+  final Function(String address, double lat, double lng, double? distance)? onLocationSelected;
+  final double? otherLatitude;
+  final double? otherLongitude;
 
   const MapboxAddressPicker({
     super.key,
@@ -17,7 +18,8 @@ class MapboxAddressPicker extends StatefulWidget {
     this.initialAddress,
     this.isPickup = false,
     this.onLocationSelected,
-    this.otherLocation,
+    this.otherLatitude,
+    this.otherLongitude,
   });
 
   @override
@@ -84,12 +86,12 @@ class _MapboxAddressPickerState extends State<MapboxAddressPicker> {
 
     // Calculate distance if other location is provided
     double? distance;
-    if (widget.otherLocation != null) {
+    if (widget.otherLatitude != null && widget.otherLongitude != null) {
       distance = await MapboxService.calculateDistance(
         suggestion.latitude,
         suggestion.longitude,
-        widget.otherLocation!.latitude,
-        widget.otherLocation!.longitude,
+        widget.otherLatitude!,
+        widget.otherLongitude!,
       );
     }
 
@@ -99,7 +101,6 @@ class _MapboxAddressPickerState extends State<MapboxAddressPicker> {
       suggestion.latitude,
       suggestion.longitude,
       distance,
-      widget.otherLocation,
     );
 
     // Update map position
