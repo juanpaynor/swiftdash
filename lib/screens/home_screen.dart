@@ -935,7 +935,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       color: AppTheme.successColor,
                     ),
                   ),
-                  if (delivery.status == 'pending')
+                  // Allow customers to cancel while the delivery is being matched or a driver
+                  // has been assigned. Show a stronger prompt for ongoing statuses.
+                  if (['pending', 'searching', 'driver_assigned'].contains(delivery.status))
                     Padding(
                       padding: const EdgeInsets.only(left: AppTheme.spacing8),
                       child: GestureDetector(
@@ -1003,6 +1005,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     showDialog(
       context: context,
       builder: (BuildContext context) {
+        // Provide a contextual message depending on the delivery status
+        String message;
+        if (delivery.status == 'searching') {
+          message = 'A driver is being matched for this request. Cancelling now will stop the search and cannot be undone. Do you want to proceed?';
+        } else if (delivery.status == 'driver_assigned') {
+          message = 'A driver has already been assigned and may be en route. Cancelling now will notify the driver and may have consequences. This action cannot be undone. Do you want to proceed?';
+        } else {
+          message = 'Are you sure you want to cancel this delivery? This action cannot be undone.';
+        }
+
         return AlertDialog(
           backgroundColor: AppTheme.surfaceColor,
           shape: RoundedRectangleBorder(
@@ -1035,7 +1047,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ],
           ),
           content: Text(
-            'Are you sure you want to cancel this delivery? This action cannot be undone.',
+            message,
             style: GoogleFonts.inter(
               fontSize: 14,
               fontWeight: FontWeight.w500,

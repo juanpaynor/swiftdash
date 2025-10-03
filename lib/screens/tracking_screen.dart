@@ -6,6 +6,7 @@ import '../services/delivery_service.dart';
 import '../services/auth_service.dart';
 import '../widgets/modern_widgets.dart';
 import '../widgets/live_tracking_map.dart';
+import '../services/realtime_service.dart';
 
 class TrackingScreen extends StatefulWidget {
   final String? deliveryId;
@@ -79,6 +80,17 @@ class _TrackingScreenState extends State<TrackingScreen> {
     if (delivery.driverId != null) {
       _startDriverLocationTracking(delivery.driverId!);
     }
+
+    // Also subscribe to delivery-scoped broadcast channel for high-frequency GPS
+    // This will provide live updates during active deliveries. We subscribe by delivery id
+    // (driver broadcasts to `driver-location-{deliveryId}`).
+    RealtimeService.instance.subscribeToLiveGps(
+      deliveryId: delivery.id,
+      onUpdate: (payload) {
+        // payload expected to contain latitude/longitude and other telemetry
+        setState(() => _driverLocation = payload);
+      },
+    );
   }
 
   void _startDriverLocationTracking(String driverId) {
@@ -95,6 +107,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
     _driverLocationSubscription?.cancel();
     _deliverySubscription = null;
     _driverLocationSubscription = null;
+
+    // Unsubscribe from broadcast channel for the active delivery if present
+    if (_activeDelivery != null) {
+      RealtimeService.instance.unsubscribeLiveGps(_activeDelivery!.id);
+    }
   }
 
   Future<void> _loadDeliveries() async {

@@ -176,10 +176,13 @@ class DeliveryService {
   }
 
   // Driver location tracking integration
+  // Driver location tracking integration
+  // NOTE: The realtime schema now uses `driver_current_status` table for lightweight
+  // driver status and last-known location. Update queries/subscriptions to use it.
   static Future<Map<String, dynamic>?> getDriverLocation(String driverId) async {
     final response = await _supabase
-        .from('driver_profiles')
-        .select('current_latitude, current_longitude, location_updated_at, is_online')
+        .from('driver_current_status')
+        .select('current_latitude, current_longitude, last_updated, status, battery_level, app_version, device_info, current_delivery_id')
         .eq('driver_id', driverId)
         .maybeSingle();
 
@@ -197,11 +200,11 @@ class DeliveryService {
 
   // Stream driver location updates for active delivery
   static Stream<Map<String, dynamic>?> streamDriverLocation(String driverId) {
-    return _supabase
-        .from('driver_profiles')
-        .stream(primaryKey: ['driver_id'])
-        .eq('driver_id', driverId)
-        .map((data) => data.isNotEmpty ? data.first : null);
+    // Stream the lightweight driver_current_status row for live updates.
+  return _supabase
+    .from('driver_current_status:driver_id=eq.$driverId')
+    .stream(primaryKey: ['driver_id'])
+    .map((data) => data.isNotEmpty ? data.first : null);
   }
 
   // Get active deliveries count (for analytics)
