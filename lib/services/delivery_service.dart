@@ -69,6 +69,14 @@ class DeliveryService {
     String? packageDescription,
     double? packageWeightKg,
     double? packageValue,
+    // Payment information
+    String? paymentBy,
+    String? paymentMethod,
+    String? paymentStatus,
+    String? mayaCheckoutId,
+    String? mayaPaymentId,
+    String? paymentReference,
+    Map<String, dynamic>? paymentMetadata,
   }) async {
     final res = await _supabase.functions.invoke('book_delivery', body: {
       'vehicleTypeId': vehicleTypeId,
@@ -90,11 +98,84 @@ class DeliveryService {
         if (packageDescription != null) 'description': packageDescription,
         if (packageWeightKg != null) 'weightKg': packageWeightKg,
         if (packageValue != null) 'value': packageValue,
-      }
+      },
+      // Payment information
+      if (paymentBy != null) 'payment': {
+        'paymentBy': paymentBy,
+        'paymentMethod': paymentMethod,
+        'paymentStatus': paymentStatus,
+        'mayaCheckoutId': mayaCheckoutId,
+        'mayaPaymentId': mayaPaymentId,
+        'paymentReference': paymentReference,
+        'paymentMetadata': paymentMetadata,
+      },
     });
 
     final data = res.data as Map<String, dynamic>;
     return Delivery.fromJson(data);
+  }
+
+  // Create delivery with payment information directly
+  static Future<Delivery> createDeliveryWithPayment({
+    required String vehicleTypeId,
+    required String pickupAddress,
+    required double pickupLat,
+    required double pickupLng,
+    required String pickupContactName,
+    required String pickupContactPhone,
+    String? pickupInstructions,
+    required String dropoffAddress,
+    required double dropoffLat,
+    required double dropoffLng,
+    required String dropoffContactName,
+    required String dropoffContactPhone,
+    String? dropoffInstructions,
+    String? packageDescription,
+    double? packageWeightKg,
+    double? packageValue,
+    required double totalPrice,
+    // Payment information
+    required String paymentBy,
+    required String paymentMethod,
+    required String paymentStatus,
+    String? mayaCheckoutId,
+    String? mayaPaymentId,
+    String? paymentReference,
+    String? paymentErrorMessage,
+    Map<String, dynamic>? paymentMetadata,
+  }) async {
+    final deliveryData = {
+      'vehicle_type_id': vehicleTypeId,
+      'pickup_address': pickupAddress,
+      'pickup_latitude': pickupLat,
+      'pickup_longitude': pickupLng,
+      'pickup_contact_name': pickupContactName,
+      'pickup_contact_phone': pickupContactPhone,
+      if (pickupInstructions != null) 'pickup_instructions': pickupInstructions,
+      'delivery_address': dropoffAddress,
+      'delivery_latitude': dropoffLat,
+      'delivery_longitude': dropoffLng,
+      'delivery_contact_name': dropoffContactName,
+      'delivery_contact_phone': dropoffContactPhone,
+      if (dropoffInstructions != null) 'delivery_instructions': dropoffInstructions,
+      'package_description': packageDescription ?? 'Package delivery',
+      if (packageWeightKg != null) 'package_weight': packageWeightKg,
+      if (packageValue != null) 'package_value': packageValue,
+      'total_price': totalPrice,
+      'status': 'pending',
+      // Payment fields
+      'payment_by': paymentBy,
+      'payment_method': paymentMethod,
+      'payment_status': paymentStatus,
+      if (mayaCheckoutId != null) 'maya_checkout_id': mayaCheckoutId,
+      if (mayaPaymentId != null) 'maya_payment_id': mayaPaymentId,
+      if (paymentReference != null) 'payment_reference': paymentReference,
+      if (paymentErrorMessage != null) 'payment_error_message': paymentErrorMessage,
+      if (paymentMetadata != null) 'payment_metadata': paymentMetadata,
+      if (paymentStatus == 'paid') 'payment_processed_at': DateTime.now().toIso8601String(),
+    };
+
+    return createDelivery(deliveryData);
   }
 
   static Future<Map<String, dynamic>> requestPairDriver(String deliveryId) async {

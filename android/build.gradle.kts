@@ -2,6 +2,8 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        maven { url = uri("https://jitpack.io") } // Add JitPack for Maya SDK
+        maven { url = uri("https://maven.paymaya.com/artifactory/android-sdk/") } // Maya official Maven repo
     }
 }
 

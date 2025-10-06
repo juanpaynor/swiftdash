@@ -52,16 +52,16 @@ final GoRouter router = GoRouter(
     ),
     GoRoute(
       path: '/tracking',
-      builder: (BuildContext context, GoRouterState state) {
-        return const TrackingScreen();
+      redirect: (context, state) {
+        // General tracking route should redirect to home since it needs a deliveryId
+        return '/home';
       },
     ),
     GoRoute(
       path: '/tracking/:deliveryId',
       builder: (BuildContext context, GoRouterState state) {
-        // For now, just redirect to general tracking screen
-        // TODO: Create a specific delivery tracking screen
-        return const TrackingScreen();
+        final deliveryId = state.pathParameters['deliveryId']!;
+        return TrackingScreen(deliveryId: deliveryId);
       },
     ),
     GoRoute(

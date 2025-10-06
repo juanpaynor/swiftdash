@@ -12,6 +12,15 @@ interface BookRequest {
   pickup: { address: string; location: LatLng; contactName: string; contactPhone: string; instructions?: string };
   dropoff: { address: string; location: LatLng; contactName: string; contactPhone: string; instructions?: string };
   package?: { description?: string; weightKg?: number; value?: number };
+  payment?: {
+    paymentBy: string;
+    paymentMethod?: string;
+    paymentStatus?: string;
+    mayaCheckoutId?: string;
+    mayaPaymentId?: string;
+    paymentReference?: string;
+    paymentMetadata?: Record<string, any>;
+  };
 }
 
 function haversineKm(a: LatLng, b: LatLng): number {
@@ -101,6 +110,15 @@ serve(async (req) => {
       package_value: body.package?.value ?? null,
       distance_km: distanceKm,
       total_price: total,
+      // Payment information
+      payment_by: body.payment?.paymentBy ?? 'customer',
+      payment_method: body.payment?.paymentMethod ?? null,
+      payment_status: body.payment?.paymentStatus ?? 'pending',
+      maya_checkout_id: body.payment?.mayaCheckoutId ?? null,
+      maya_payment_id: body.payment?.mayaPaymentId ?? null,
+      payment_reference: body.payment?.paymentReference ?? null,
+      payment_metadata: body.payment?.paymentMetadata ?? null,
+      payment_processed_at: body.payment?.paymentStatus === 'paid' ? new Date().toISOString() : null,
     };
 
     const { data: created, error: insErr } = await supabase

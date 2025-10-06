@@ -39,6 +39,17 @@ class Delivery {
   final int? customerRating;
   final int? driverRating;
 
+  // Payment Information
+  final String? paymentBy;          // 'sender' or 'recipient'
+  final String? paymentMethod;      // 'credit_card', 'maya_wallet', 'cash'
+  final String? paymentStatus;      // 'pending', 'paid', 'failed', 'cash_pending'
+  final String? mayaCheckoutId;     // Maya checkout session ID
+  final String? mayaPaymentId;      // Maya payment transaction ID
+  final String? paymentReference;   // Internal reference number
+  final DateTime? paymentProcessedAt; // When payment was completed
+  final String? paymentErrorMessage;  // Error message if payment failed
+  final Map<String, dynamic>? paymentMetadata; // Additional payment data
+
   // Timestamps
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -70,6 +81,16 @@ class Delivery {
     required this.status,
     this.customerRating,
     this.driverRating,
+    // Payment fields
+    this.paymentBy,
+    this.paymentMethod,
+    this.paymentStatus,
+    this.mayaCheckoutId,
+    this.mayaPaymentId,
+    this.paymentReference,
+    this.paymentProcessedAt,
+    this.paymentErrorMessage,
+    this.paymentMetadata,
     required this.createdAt,
     required this.updatedAt,
     this.completedAt,
@@ -105,6 +126,17 @@ class Delivery {
       status: json['status'] as String,
       customerRating: json['customer_rating'] as int?,
       driverRating: json['driver_rating'] as int?,
+      // Payment fields
+      paymentBy: json['payment_by'] as String?,
+      paymentMethod: json['payment_method'] as String?,
+      paymentStatus: json['payment_status'] as String?,
+      mayaCheckoutId: json['maya_checkout_id'] as String?,
+      mayaPaymentId: json['maya_payment_id'] as String?,
+      paymentReference: json['payment_reference'] as String?,
+      paymentProcessedAt: json['payment_processed_at'] != null ? 
+          DateTime.parse(json['payment_processed_at'] as String) : null,
+      paymentErrorMessage: json['payment_error_message'] as String?,
+      paymentMetadata: json['payment_metadata'] as Map<String, dynamic>?,
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
       completedAt: json['completed_at'] != null ? 
@@ -138,6 +170,16 @@ class Delivery {
       'status': status,
       'customer_rating': customerRating,
       'driver_rating': driverRating,
+      // Payment fields
+      'payment_by': paymentBy,
+      'payment_method': paymentMethod,
+      'payment_status': paymentStatus,
+      'maya_checkout_id': mayaCheckoutId,
+      'maya_payment_id': mayaPaymentId,
+      'payment_reference': paymentReference,
+      'payment_processed_at': paymentProcessedAt?.toIso8601String(),
+      'payment_error_message': paymentErrorMessage,
+      'payment_metadata': paymentMetadata,
     };
   }
 
@@ -195,6 +237,70 @@ class Delivery {
             'package_collected', 'in_transit'].contains(status);
   }
 
+  // Payment helper methods
+  bool get isPaid {
+    return paymentStatus == 'paid';
+  }
+
+  bool get isPendingPayment {
+    return paymentStatus == 'pending' || paymentStatus == null;
+  }
+
+  bool get isPaymentFailed {
+    return paymentStatus == 'failed';
+  }
+
+  bool get isCashPayment {
+    return paymentMethod == 'cash';
+  }
+
+  bool get isDigitalPayment {
+    return paymentMethod == 'credit_card' || paymentMethod == 'maya_wallet';
+  }
+
+  bool get isCashPending {
+    return paymentStatus == 'cash_pending';
+  }
+
+  String get paymentStatusDisplay {
+    switch (paymentStatus) {
+      case 'pending':
+        return 'Payment Pending';
+      case 'paid':
+        return 'Paid';
+      case 'failed':
+        return 'Payment Failed';
+      case 'cash_pending':
+        return 'Cash Payment Pending';
+      default:
+        return 'Payment Status Unknown';
+    }
+  }
+
+  String get paymentMethodDisplay {
+    switch (paymentMethod) {
+      case 'credit_card':
+        return 'Credit/Debit Card';
+      case 'maya_wallet':
+        return 'Maya Wallet';
+      case 'cash':
+        return 'Cash';
+      default:
+        return 'Unknown Payment Method';
+    }
+  }
+
+  String get paymentByDisplay {
+    switch (paymentBy) {
+      case 'sender':
+        return 'Sender Pays';
+      case 'recipient':
+        return 'Recipient Pays';
+      default:
+        return 'Payment Method Not Set';
+    }
+  }
+
   // Copy with method for updates
   Delivery copyWith({
     String? id,
@@ -222,6 +328,16 @@ class Delivery {
     String? status,
     int? customerRating,
     int? driverRating,
+    // Payment parameters
+    String? paymentBy,
+    String? paymentMethod,
+    String? paymentStatus,
+    String? mayaCheckoutId,
+    String? mayaPaymentId,
+    String? paymentReference,
+    DateTime? paymentProcessedAt,
+    String? paymentErrorMessage,
+    Map<String, dynamic>? paymentMetadata,
     DateTime? createdAt,
     DateTime? updatedAt,
     DateTime? completedAt,
@@ -252,6 +368,16 @@ class Delivery {
       status: status ?? this.status,
       customerRating: customerRating ?? this.customerRating,
       driverRating: driverRating ?? this.driverRating,
+      // Payment fields
+      paymentBy: paymentBy ?? this.paymentBy,
+      paymentMethod: paymentMethod ?? this.paymentMethod,
+      paymentStatus: paymentStatus ?? this.paymentStatus,
+      mayaCheckoutId: mayaCheckoutId ?? this.mayaCheckoutId,
+      mayaPaymentId: mayaPaymentId ?? this.mayaPaymentId,
+      paymentReference: paymentReference ?? this.paymentReference,
+      paymentProcessedAt: paymentProcessedAt ?? this.paymentProcessedAt,
+      paymentErrorMessage: paymentErrorMessage ?? this.paymentErrorMessage,
+      paymentMetadata: paymentMetadata ?? this.paymentMetadata,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       completedAt: completedAt ?? this.completedAt,

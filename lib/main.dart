@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:myapp/config/env.dart';
 import 'package:myapp/constants/app_theme.dart';
 import 'package:myapp/screens/splash_screen.dart';
+import 'package:myapp/services/payment_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,6 +33,18 @@ Future<void> main() async {
 
     // Initialize Mapbox with access token
     MapboxOptions.setAccessToken('pk.eyJ1Ijoic3dpZnRkYXNoIiwiYSI6ImNtZzNiazczczEzZmQycnIwdno1Z2NtYW0ifQ.9zBJVXVCBLU3eN1jZQTJUA');
+
+    // Initialize PaymentService with Maya credentials from environment
+    try {
+      await PaymentService.initialize(
+        publicKey: Env.mayaPublicKey,
+        isSandbox: Env.mayaIsSandbox,
+      );
+      debugPrint('Payment service initialized successfully - Environment: ${Env.mayaIsSandbox ? 'SANDBOX' : 'PRODUCTION'}');
+    } catch (e) {
+      debugPrint('Payment service initialization failed: $e');
+      // Don't fail the entire app if payment service fails to initialize
+    }
   } catch (e, st) {
     // Keep the error so we can show a useful UI instead of a white screen
     initError = e.toString();

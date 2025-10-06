@@ -3,8 +3,12 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:go_router/go_router.dart';
 import '../models/vehicle_type.dart';
+import '../models/payment_enums.dart';
+import '../models/payment_config.dart';
+import '../models/payment_result.dart';
 import '../services/delivery_service.dart';
 import '../services/directions_service.dart';
+import '../services/payment_service.dart';
 import '../widgets/modern_widgets.dart';
 import '../constants/app_theme.dart';
 
@@ -25,6 +29,10 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
   bool _isBooking = false;
   double? _distance;
   double? _price;
+  
+  // Payment state
+  PaymentBy _selectedPaymentBy = PaymentBy.sender;
+  PaymentMethod _selectedPaymentMethod = PaymentMethod.creditCard;
   
   // Form controllers for additional details
   final _formKey = GlobalKey<FormState>();
@@ -110,61 +118,6 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
     }
   }
 
-  Future<void> _bookDelivery() async {
-    if (!_formKey.currentState!.validate()) return;
-    
-    if (_distance == null || _price == null) {
-      ModernToast.error(
-        context: context,
-        message: 'Unable to calculate delivery price. Please try again.',
-      );
-      return;
-    }
-
-    setState(() => _isBooking = true);
-    HapticFeedback.mediumImpact();
-
-    try {
-      final delivery = await DeliveryService.bookDeliveryViaFunction(
-        vehicleTypeId: vehicleType.id,
-        pickupAddress: pickupAddress,
-        pickupLat: pickupLat,
-        pickupLng: pickupLng,
-        pickupContactName: _pickupContactNameController.text,
-        pickupContactPhone: _pickupContactPhoneController.text,
-        pickupInstructions: _pickupInstructionsController.text.isNotEmpty
-            ? _pickupInstructionsController.text
-            : null,
-        dropoffAddress: deliveryAddress,
-        dropoffLat: deliveryLat,
-        dropoffLng: deliveryLng,
-        dropoffContactName: _deliveryContactNameController.text,
-        dropoffContactPhone: _deliveryContactPhoneController.text,
-        dropoffInstructions: _deliveryInstructionsController.text.isNotEmpty
-            ? _deliveryInstructionsController.text
-            : null,
-        packageDescription: _packageDescriptionController.text,
-        packageWeightKg: double.tryParse(_packageWeightController.text),
-        packageValue: double.tryParse(_packageValueController.text),
-      );
-
-      if (mounted) {
-        HapticFeedback.heavyImpact();
-        // Clear the navigation stack and go to matching screen
-        context.go('/matching/${delivery.id}');
-      }
-    } catch (e) {
-      if (mounted) {
-        ModernToast.error(
-          context: context,
-          message: 'Error creating delivery: $e',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isBooking = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -213,6 +166,10 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
                     
                     // Package Details
                     _buildPackageSection(),
+                    const SizedBox(height: 24),
+                    
+                    // Payment Section
+                    _buildPaymentSection(),
                     const SizedBox(height: 40),
                     
                     // Book Delivery Button
@@ -627,13 +584,426 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
     );
   }
 
+  Widget _buildPaymentSection() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.shadowLight,
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.payment_rounded,
+                color: AppTheme.primaryBlue,
+                size: 24,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Payment Method',
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          // Who Pays Section
+          _buildWhoPaysList(),
+          const SizedBox(height: 20),
+
+          // Payment Method Section
+          _buildPaymentMethodsList(),
+          const SizedBox(height: 16),
+
+          // Payment Summary
+          _buildPaymentSummary(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWhoPaysList() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Who pays for this delivery?',
+          style: GoogleFonts.inter(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: AppTheme.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 12),
+        
+        // Sender pays option
+        GestureDetector(
+          onTap: () {
+            setState(() {
+              _selectedPaymentBy = PaymentBy.sender;
+              // Reset to digital payment when sender is selected
+              if (_selectedPaymentMethod == PaymentMethod.cash && 
+                  _selectedPaymentBy == PaymentBy.sender) {
+                _selectedPaymentMethod = PaymentMethod.creditCard;
+              }
+            });
+            HapticFeedback.selectionClick();
+          },
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _selectedPaymentBy == PaymentBy.sender 
+                  ? AppTheme.primaryBlue.withOpacity(0.1)
+                  : AppTheme.surfaceColor,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: _selectedPaymentBy == PaymentBy.sender
+                    ? AppTheme.primaryBlue
+                    : AppTheme.borderColor,
+                width: 2,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _selectedPaymentBy == PaymentBy.sender
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  color: _selectedPaymentBy == PaymentBy.sender
+                      ? AppTheme.primaryBlue
+                      : AppTheme.textSecondary,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        PaymentBy.sender.displayName,
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        PaymentBy.sender.description,
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        
+        // Recipient pays option
+        GestureDetector(
+          onTap: () {
+            setState(() {
+              _selectedPaymentBy = PaymentBy.recipient;
+              // Force cash payment when recipient is selected
+              _selectedPaymentMethod = PaymentMethod.cash;
+            });
+            HapticFeedback.selectionClick();
+          },
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _selectedPaymentBy == PaymentBy.recipient 
+                  ? AppTheme.primaryBlue.withOpacity(0.1)
+                  : AppTheme.surfaceColor,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: _selectedPaymentBy == PaymentBy.recipient
+                    ? AppTheme.primaryBlue
+                    : AppTheme.borderColor,
+                width: 2,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _selectedPaymentBy == PaymentBy.recipient
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  color: _selectedPaymentBy == PaymentBy.recipient
+                      ? AppTheme.primaryBlue
+                      : AppTheme.textSecondary,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        PaymentBy.recipient.displayName,
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        PaymentBy.recipient.description,
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPaymentMethodsList() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'How would you like to pay?',
+          style: GoogleFonts.inter(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: AppTheme.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 12),
+        
+        // Get available payment methods based on who pays
+        ...PaymentMethod.values.map((method) {
+          final isAvailable = _isPaymentMethodAvailable(method);
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _buildPaymentMethodCard(method, isAvailable),
+          );
+        }).toList(),
+      ],
+    );
+  }
+
+  bool _isPaymentMethodAvailable(PaymentMethod method) {
+    // Recipient can only pay with cash
+    if (_selectedPaymentBy == PaymentBy.recipient) {
+      return method == PaymentMethod.cash;
+    }
+    // Sender can pay with any method
+    return true;
+  }
+
+  Widget _buildPaymentMethodCard(PaymentMethod method, bool isAvailable) {
+    final isSelected = _selectedPaymentMethod == method && isAvailable;
+    
+    return GestureDetector(
+      onTap: isAvailable ? () {
+        setState(() {
+          _selectedPaymentMethod = method;
+        });
+        HapticFeedback.selectionClick();
+      } : null,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isSelected 
+              ? AppTheme.primaryBlue.withOpacity(0.1)
+              : isAvailable 
+                  ? AppTheme.surfaceColor
+                  : AppTheme.surfaceColor.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected
+                ? AppTheme.primaryBlue
+                : AppTheme.borderColor,
+            width: 2,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              isSelected
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_unchecked,
+              color: isSelected
+                  ? AppTheme.primaryBlue
+                  : isAvailable 
+                      ? AppTheme.textSecondary
+                      : AppTheme.textSecondary.withOpacity(0.5),
+            ),
+            const SizedBox(width: 12),
+            _buildPaymentMethodIcon(method, isAvailable),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    method.displayName,
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: isAvailable 
+                          ? AppTheme.textPrimary
+                          : AppTheme.textSecondary.withOpacity(0.5),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _getPaymentMethodDescription(method),
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      color: isAvailable 
+                          ? AppTheme.textSecondary
+                          : AppTheme.textSecondary.withOpacity(0.5),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (!isAvailable)
+              Icon(
+                Icons.block,
+                color: AppTheme.textSecondary.withOpacity(0.5),
+                size: 20,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPaymentMethodIcon(PaymentMethod method, bool isAvailable) {
+    final color = isAvailable ? AppTheme.primaryBlue : AppTheme.textSecondary.withOpacity(0.5);
+    
+    switch (method) {
+      case PaymentMethod.creditCard:
+        return Icon(Icons.credit_card, color: color, size: 24);
+      case PaymentMethod.mayaWallet:
+        return Icon(Icons.account_balance_wallet, color: color, size: 24);
+      case PaymentMethod.cash:
+        return Icon(Icons.payments, color: color, size: 24);
+    }
+  }
+
+  String _getPaymentMethodDescription(PaymentMethod method) {
+    if (_selectedPaymentBy == PaymentBy.recipient && method != PaymentMethod.cash) {
+      return 'Only available for sender payments';
+    }
+    
+    switch (method) {
+      case PaymentMethod.creditCard:
+        return method.description;
+      case PaymentMethod.mayaWallet:
+        return method.description;
+      case PaymentMethod.cash:
+        return _selectedPaymentBy == PaymentBy.sender 
+            ? 'Pay driver at pickup'
+            : 'Pay driver at delivery';
+    }
+  }
+
+  Widget _buildPaymentSummary() {
+    final config = _createPaymentConfig();
+    
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.primaryBlue.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppTheme.primaryBlue.withOpacity(0.2),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.info_outline,
+            color: AppTheme.primaryBlue,
+            size: 20,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  config.paymentTiming,
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+                if (_price != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Amount: ₱${_price!.toStringAsFixed(2)}',
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  PaymentConfig _createPaymentConfig() {
+    return PaymentConfig.fromDeliveryData(
+      paidBy: _selectedPaymentBy,
+      method: _selectedPaymentMethod,
+      amount: _price ?? 0.0,
+      deliveryId: 'temp_${DateTime.now().millisecondsSinceEpoch}',
+      contactName: _selectedPaymentBy == PaymentBy.sender 
+          ? _pickupContactNameController.text
+          : _deliveryContactNameController.text,
+      contactPhone: _selectedPaymentBy == PaymentBy.sender 
+          ? _pickupContactPhoneController.text
+          : _deliveryContactPhoneController.text,
+    );
+  }
+
   Widget _buildBookButton() {
+    final isDigitalPayment = _selectedPaymentMethod.isDigital;
+    final buttonText = _getBookButtonText();
+    
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton(
-        onPressed: (_distance != null && _price != null && !_isBooking) ? _bookDelivery : null,
+        onPressed: (_distance != null && _price != null && !_isBooking) ? _handleBookDelivery : null,
         style: ElevatedButton.styleFrom(
-          backgroundColor: AppTheme.primaryBlue,
+          backgroundColor: isDigitalPayment ? AppTheme.primaryBlue : AppTheme.successColor,
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(vertical: 20),
           shape: RoundedRectangleBorder(
@@ -651,9 +1021,7 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
               ),
             )
           : Text(
-              _price != null 
-                  ? 'Book Delivery - ₱${_price!.toStringAsFixed(2)}'
-                  : 'Calculating price...',
+              buttonText,
               style: GoogleFonts.inter(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
@@ -661,5 +1029,154 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
             ),
       ),
     );
+  }
+
+  String _getBookButtonText() {
+    if (_price == null) return 'Calculating price...';
+    
+    final price = '₱${_price!.toStringAsFixed(2)}';
+    
+    switch (_selectedPaymentMethod) {
+      case PaymentMethod.creditCard:
+        return 'Pay $price with Card';
+      case PaymentMethod.mayaWallet:
+        return 'Pay $price with Maya';
+      case PaymentMethod.cash:
+        return _selectedPaymentBy == PaymentBy.sender
+            ? 'Book Delivery - $price (Cash)'
+            : 'Book Delivery - $price (COD)';
+    }
+  }
+
+  Future<void> _handleBookDelivery() async {
+    if (!_formKey.currentState!.validate()) {
+      ModernToast.error(
+        context: context,
+        message: 'Please fill in all required fields',
+      );
+      return;
+    }
+
+    setState(() => _isBooking = true);
+
+    try {
+      // Create payment configuration
+      final paymentConfig = PaymentConfig.fromDeliveryData(
+        paidBy: _selectedPaymentBy,
+        method: _selectedPaymentMethod,
+        amount: _price!,
+        deliveryId: 'temp_${DateTime.now().millisecondsSinceEpoch}',
+        contactName: _selectedPaymentBy == PaymentBy.sender 
+            ? _pickupContactNameController.text
+            : _deliveryContactNameController.text,
+        contactPhone: _selectedPaymentBy == PaymentBy.sender 
+            ? _pickupContactPhoneController.text
+            : _deliveryContactPhoneController.text,
+        customerEmail: null, // Could get from auth user if available
+      );
+
+      PaymentResult? paymentResult;
+
+      // Process payment if digital method
+      if (_selectedPaymentMethod.isDigital) {
+        paymentResult = await PaymentService.processPayment(paymentConfig);
+        
+        if (!paymentResult.isSuccess) {
+          if (mounted) {
+            ModernToast.error(
+              context: context,
+              message: paymentResult.statusMessage,
+            );
+          }
+          return;
+        }
+      } else {
+        // Cash payment - create success result
+        paymentResult = PaymentResult.cashSuccess(
+          deliveryId: paymentConfig.deliveryId,
+          amount: paymentConfig.amount,
+        );
+      }
+
+      // Create delivery with payment information
+      await _createDeliveryWithPayment(paymentResult);
+
+    } catch (e) {
+      if (mounted) {
+        ModernToast.error(
+          context: context,
+          message: 'Error processing payment: $e',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isBooking = false);
+    }
+  }
+
+  Future<void> _createDeliveryWithPayment(PaymentResult paymentResult) async {
+    try {
+      // Create delivery using existing service but with payment data
+      final delivery = await DeliveryService.bookDeliveryViaFunction(
+        vehicleTypeId: vehicleType.id,
+        pickupAddress: pickupAddress,
+        pickupLat: pickupLat,
+        pickupLng: pickupLng,
+        pickupContactName: _pickupContactNameController.text,
+        pickupContactPhone: _pickupContactPhoneController.text,
+        pickupInstructions: _pickupInstructionsController.text.isNotEmpty
+            ? _pickupInstructionsController.text
+            : null,
+        dropoffAddress: deliveryAddress,
+        dropoffLat: deliveryLat,
+        dropoffLng: deliveryLng,
+        dropoffContactName: _deliveryContactNameController.text,
+        dropoffContactPhone: _deliveryContactPhoneController.text,
+        dropoffInstructions: _deliveryInstructionsController.text.isNotEmpty
+            ? _deliveryInstructionsController.text
+            : null,
+        packageDescription: _packageDescriptionController.text,
+        packageWeightKg: double.tryParse(_packageWeightController.text),
+        packageValue: double.tryParse(_packageValueController.text),
+        // Payment information
+        paymentBy: _selectedPaymentBy.name,
+        paymentMethod: _selectedPaymentMethod.name,
+        paymentStatus: paymentResult.status.name,
+        mayaCheckoutId: paymentResult.checkoutId,
+        mayaPaymentId: paymentResult.paymentId,
+        paymentReference: paymentResult.paymentId ?? paymentResult.checkoutId,
+        paymentMetadata: paymentResult.transactionData,
+      );
+
+      // Update delivery with payment information (this would need to be added to DeliveryService)
+      // For now, we'll proceed to matching screen
+      
+      if (mounted) {
+        HapticFeedback.heavyImpact();
+        
+        // Show success message based on payment type
+        if (paymentResult.isSuccess && _selectedPaymentMethod.isDigital) {
+          ModernToast.success(
+            context: context,
+            message: 'Payment successful! Finding driver...',
+          );
+        } else if (_selectedPaymentMethod == PaymentMethod.cash) {
+          ModernToast.success(
+            context: context,
+            message: 'Delivery booked! Finding driver...',
+          );
+        }
+        
+        // Navigate to matching screen
+        context.go('/matching/${delivery.id}');
+      }
+    } catch (e) {
+      if (mounted) {
+        ModernToast.error(
+          context: context,
+          message: 'Error creating delivery: $e',
+        );
+      }
+      rethrow;
+    }
   }
 }

@@ -52,6 +52,28 @@ class Env {
     return envValue;
   }
 
+  // SECURE: Maya Payment API Keys from environment
+  static String get mayaPublicKey {
+    final envValue = dotenv.env['MAYA_PUBLIC_KEY'];
+    if (envValue == null || envValue.isEmpty) {
+      throw Exception('MAYA_PUBLIC_KEY not found in .env file');
+    }
+    return envValue;
+  }
+
+  static String get mayaSecretKey {
+    final envValue = dotenv.env['MAYA_SECRET_KEY'];
+    if (envValue == null || envValue.isEmpty) {
+      throw Exception('MAYA_SECRET_KEY not found in .env file');
+    }
+    return envValue;
+  }
+
+  static bool get mayaIsSandbox {
+    final envValue = dotenv.env['MAYA_ENVIRONMENT'];
+    return envValue?.toLowerCase() == 'sandbox';
+  }
+
   static String get mapProvider {
     final envValue = dotenv.env['MAP_PROVIDER'];
     if (envValue != null && envValue.isNotEmpty) {

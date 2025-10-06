@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../constants/app_theme.dart';
 import '../widgets/modern_widgets.dart';
 import '../models/delivery.dart';
+import '../services/delivery_service.dart';
 
 class MatchingScreen extends StatefulWidget {
   final String deliveryId;
@@ -29,6 +30,10 @@ class _MatchingScreenState extends State<MatchingScreen>
   Delivery? _delivery;
   String _currentMessage = "Looking for available drivers...";
   int _searchStep = 0;
+  bool _isSearching = true;
+  bool _searchFailed = false;
+  String? _failureReason;
+  Timer? _searchTimer;
   
   final List<String> _searchMessages = [
     "Looking for available drivers...",
@@ -36,6 +41,14 @@ class _MatchingScreenState extends State<MatchingScreen>
     "Finding the best match...",
     "Contacting nearby drivers...",
     "Almost there! Finalizing match...",
+  ];
+
+  final List<String> _noDriverMessages = [
+    "Expanding search radius...",
+    "Checking more drivers...",
+    "Looking for backup options...", 
+    "Trying alternative routes...",
+    "Still searching for you...",
   ];
 
   @override
@@ -53,7 +66,7 @@ class _MatchingScreenState extends State<MatchingScreen>
     )..repeat();
     
     _loadDeliveryDetails();
-    _startSearchAnimation();
+    _startDriverSearch();
     
     // Listen for delivery updates
     _listenForDriverMatch();
@@ -63,13 +76,49 @@ class _MatchingScreenState extends State<MatchingScreen>
   void dispose() {
     _pulseController.dispose();
     _searchController.dispose();
+    _searchTimer?.cancel();
     super.dispose();
+  }
+
+  void _startDriverSearch() async {
+    // Start the search animation
+    _startSearchAnimation();
+    
+    try {
+      // Actually call the pair driver function
+      final result = await DeliveryService.requestPairDriver(widget.deliveryId);
+      
+      if (result['ok'] == true) {
+        // Success - driver found and assigned
+        // The real-time listener will handle the UI update
+        debugPrint('Driver search successful: ${result['assigned_driver_id']}');
+      } else {
+        // No drivers found
+        _handleSearchFailure(result['message'] ?? 'No available drivers found');
+      }
+    } catch (e) {
+      debugPrint('Driver search error: $e');
+      _handleSearchFailure('Unable to find drivers at the moment. Please try again.');
+    }
+  }
+
+  void _handleSearchFailure(String reason) {
+    if (!mounted) return;
+    
+    setState(() {
+      _isSearching = false;
+      _searchFailed = true;
+      _failureReason = reason;
+      _currentMessage = "No drivers available right now";
+    });
+    
+    _searchTimer?.cancel();
   }
 
   void _startSearchAnimation() {
     // Cycle through search messages
-    Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (!mounted) {
+    _searchTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      if (!mounted || _searchFailed) {
         timer.cancel();
         return;
       }
@@ -79,9 +128,39 @@ class _MatchingScreenState extends State<MatchingScreen>
         _currentMessage = _searchMessages[_searchStep];
       });
       
-      // Stop after going through all messages once
-      if (_searchStep == _searchMessages.length - 1) {
+      // After first cycle, show "still searching" messages if no driver found
+      if (_searchStep == _searchMessages.length - 1 && _isSearching) {
+        // Switch to extended search messages
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted && _isSearching && !_searchFailed) {
+            _startExtendedSearch();
+          }
+        });
+      }
+    });
+  }
+
+  void _startExtendedSearch() {
+    _searchTimer?.cancel();
+    int extendedStep = 0;
+    
+    _searchTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
+      if (!mounted || _searchFailed) {
         timer.cancel();
+        return;
+      }
+      
+      setState(() {
+        extendedStep = (extendedStep + 1) % _noDriverMessages.length;
+        _currentMessage = _noDriverMessages[extendedStep];
+      });
+      
+      // After extended search (about 30 seconds total), show failure
+      if (extendedStep == _noDriverMessages.length - 1) {
+        timer.cancel();
+        if (_isSearching) {
+          _handleSearchFailure('No drivers available in your area right now');
+        }
       }
     });
   }
@@ -129,6 +208,15 @@ class _MatchingScreenState extends State<MatchingScreen>
   }
 
   void _onDriverMatched(Delivery delivery) {
+    if (!mounted) return;
+    
+    // Stop search timers and mark as successful
+    _searchTimer?.cancel();
+    setState(() {
+      _isSearching = false;
+      _searchFailed = false;
+    });
+    
     HapticFeedback.heavyImpact();
     
     // Show success animation then navigate
@@ -249,6 +337,11 @@ class _MatchingScreenState extends State<MatchingScreen>
                       
                       const SizedBox(height: AppTheme.spacing40),
                       
+                      // Search failure options
+                      if (_searchFailed) _buildFailureOptions(),
+                      
+                      const SizedBox(height: AppTheme.spacing40),
+                      
                       // Delivery summary
                       if (_delivery != null) _buildDeliverySummary(),
                       
@@ -318,6 +411,26 @@ class _MatchingScreenState extends State<MatchingScreen>
   }
 
   Widget _buildSearchIndicator() {
+    if (_searchFailed) {
+      return Container(
+        width: 180,
+        height: 180,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: AppTheme.errorColor.withOpacity(0.1),
+          border: Border.all(
+            color: AppTheme.errorColor.withOpacity(0.3),
+            width: 2,
+          ),
+        ),
+        child: const Icon(
+          Icons.search_off_rounded,
+          color: AppTheme.errorColor,
+          size: 50,
+        ),
+      ).animate().scale(delay: 200.milliseconds);
+    }
+
     return AnimatedBuilder(
       animation: _pulseController,
       builder: (context, child) {
@@ -373,21 +486,33 @@ class _MatchingScreenState extends State<MatchingScreen>
           style: GoogleFonts.inter(
             fontSize: 20,
             fontWeight: FontWeight.w700,
-            color: AppTheme.textPrimary,
+            color: _searchFailed ? AppTheme.errorColor : AppTheme.textPrimary,
           ),
           textAlign: TextAlign.center,
         ).animate().fadeIn().slideY(begin: 0.2),
         
         const SizedBox(height: AppTheme.spacing12),
         
-        Text(
-          'This usually takes 1-3 minutes',
-          style: GoogleFonts.inter(
-            fontSize: 16,
-            fontWeight: FontWeight.w500,
-            color: AppTheme.textSecondary,
-          ),
-        ).animate(delay: 200.milliseconds).fadeIn(),
+        if (_searchFailed && _failureReason != null) ...[
+          Text(
+            _failureReason!,
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: AppTheme.textSecondary,
+            ),
+            textAlign: TextAlign.center,
+          ).animate(delay: 200.milliseconds).fadeIn(),
+        ] else ...[
+          Text(
+            _isSearching ? 'This usually takes 1-3 minutes' : 'Please wait...',
+            style: GoogleFonts.inter(
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+              color: AppTheme.textSecondary,
+            ),
+          ).animate(delay: 200.milliseconds).fadeIn(),
+        ],
       ],
     );
   }
@@ -531,14 +656,14 @@ class _MatchingScreenState extends State<MatchingScreen>
         children: [
           Row(
             children: [
-              const Icon(
-                Icons.lightbulb_outline,
-                color: AppTheme.warningColor,
+              Icon(
+                _searchFailed ? Icons.info_outline : Icons.lightbulb_outline,
+                color: _searchFailed ? AppTheme.infoColor : AppTheme.warningColor,
                 size: 24,
               ),
               const SizedBox(width: AppTheme.spacing12),
               Text(
-                'While You Wait',
+                _searchFailed ? 'What\'s Next?' : 'While You Wait',
                 style: GoogleFonts.inter(
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
@@ -550,13 +675,90 @@ class _MatchingScreenState extends State<MatchingScreen>
           
           const SizedBox(height: AppTheme.spacing16),
           
-          _buildTipItem('📱 You\'ll get notified when a driver accepts'),
-          _buildTipItem('🚗 Driver will head to pickup location first'),
-          _buildTipItem('📍 You can track the delivery in real-time'),
-          _buildTipItem('💬 Contact your driver through the app'),
+          if (_searchFailed) ...[
+            _buildTipItem('🔄 Try searching again in a few minutes'),
+            _buildTipItem('📞 Contact support if the issue persists'),
+            _buildTipItem('🚗 Drivers may be busy during peak hours'),
+            _buildTipItem('📍 Check if your location is in our service area'),
+          ] else ...[
+            _buildTipItem('📱 You\'ll get notified when a driver accepts'),
+            _buildTipItem('🚗 Driver will head to pickup location first'),
+            _buildTipItem('📍 You can track the delivery in real-time'),
+            _buildTipItem('💬 Contact your driver through the app'),
+          ],
         ],
       ),
     ).animate().fadeIn().slideY(begin: 0.2);
+  }
+
+  Widget _buildFailureOptions() {
+    return Column(
+      children: [
+        ModernCard(
+          child: Column(
+            children: [
+              Icon(
+                Icons.sentiment_dissatisfied_outlined,
+                size: 48,
+                color: AppTheme.textSecondary,
+              ),
+              const SizedBox(height: AppTheme.spacing16),
+              Text(
+                'No Drivers Available',
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const SizedBox(height: AppTheme.spacing8),
+              Text(
+                'All drivers in your area are currently busy. You can try again or we\'ll notify you when drivers become available.',
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: AppTheme.textSecondary,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: AppTheme.spacing20),
+              Row(
+                children: [
+                  Expanded(
+                    child: ModernButton(
+                      text: 'Try Again',
+                      onPressed: _retrySearch,
+                      icon: Icons.refresh_rounded,
+                      isSecondary: true,
+                    ),
+                  ),
+                  const SizedBox(width: AppTheme.spacing12),
+                  Expanded(
+                    child: ModernButton(
+                      text: 'Cancel',
+                      onPressed: () => _showCancelDialog(),
+                      icon: Icons.close_rounded,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    ).animate().fadeIn().slideY(begin: 0.2);
+  }
+
+  void _retrySearch() {
+    setState(() {
+      _isSearching = true;
+      _searchFailed = false;
+      _failureReason = null;
+      _searchStep = 0;
+      _currentMessage = "Looking for available drivers...";
+    });
+    
+    _startDriverSearch();
   }
 
   Widget _buildTipItem(String text) {
