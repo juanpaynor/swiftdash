@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../constants/app_theme.dart';
 import '../widgets/modern_widgets.dart';
 import '../models/delivery.dart';
+import '../models/vehicle_type.dart';
 import '../services/delivery_service.dart';
 
 class MatchingScreen extends StatefulWidget {
@@ -28,12 +29,17 @@ class _MatchingScreenState extends State<MatchingScreen>
   late AnimationController _searchController;
   
   Delivery? _delivery;
+  VehicleType? _vehicleType;
   String _currentMessage = "Looking for available drivers...";
   int _searchStep = 0;
   bool _isSearching = true;
   bool _searchFailed = false;
   String? _failureReason;
   Timer? _searchTimer;
+  
+  // NEW: Real-time subscription and cancellation flag
+  StreamSubscription<List<Map<String, dynamic>>>? _deliverySubscription;
+  bool _isCancelled = false;
   
   final List<String> _searchMessages = [
     "Looking for available drivers...",
@@ -74,9 +80,16 @@ class _MatchingScreenState extends State<MatchingScreen>
 
   @override
   void dispose() {
+    // Mark as cancelled to prevent any further actions
+    _isCancelled = true;
+    
+    // Cancel all timers and subscriptions
     _pulseController.dispose();
     _searchController.dispose();
     _searchTimer?.cancel();
+    _acceptanceTimeoutTimer?.cancel();
+    _deliverySubscription?.cancel();
+    
     super.dispose();
   }
 
@@ -85,19 +98,31 @@ class _MatchingScreenState extends State<MatchingScreen>
     _startSearchAnimation();
     
     try {
+      debugPrint('🔍 Starting driver search for delivery: ${widget.deliveryId}');
+      
+      // First, let's check if we can find drivers manually
+      await _debugAvailableDrivers();
+      
       // Actually call the pair driver function
       final result = await DeliveryService.requestPairDriver(widget.deliveryId);
+      
+      debugPrint('🚗 Driver search result: $result');
       
       if (result['ok'] == true) {
         // Success - driver found and assigned
         // The real-time listener will handle the UI update
-        debugPrint('Driver search successful: ${result['assigned_driver_id']}');
+        debugPrint('✅ Driver search successful: ${result['assigned_driver_id']}');
+        debugPrint('📊 Found ${result['drivers_found']} drivers, closest at ${result['closest_driver_distance']}km');
       } else {
         // No drivers found
+        debugPrint('❌ No drivers found: ${result['message']}');
+        debugPrint('🔧 Full error response: $result');
         _handleSearchFailure(result['message'] ?? 'No available drivers found');
       }
     } catch (e) {
-      debugPrint('Driver search error: $e');
+      debugPrint('💥 Driver search error: $e');
+      debugPrint('🔧 Error type: ${e.runtimeType}');
+      debugPrint('🔧 Error details: ${e.toString()}');
       _handleSearchFailure('Unable to find drivers at the moment. Please try again.');
     }
   }
@@ -118,7 +143,8 @@ class _MatchingScreenState extends State<MatchingScreen>
   void _startSearchAnimation() {
     // Cycle through search messages
     _searchTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (!mounted || _searchFailed) {
+      // FIXED: Check if cancelled in addition to other conditions
+      if (!mounted || _searchFailed || _isCancelled) {
         timer.cancel();
         return;
       }
@@ -129,10 +155,10 @@ class _MatchingScreenState extends State<MatchingScreen>
       });
       
       // After first cycle, show "still searching" messages if no driver found
-      if (_searchStep == _searchMessages.length - 1 && _isSearching) {
+      if (_searchStep == _searchMessages.length - 1 && _isSearching && !_isCancelled) {
         // Switch to extended search messages
         Future.delayed(const Duration(seconds: 3), () {
-          if (mounted && _isSearching && !_searchFailed) {
+          if (mounted && _isSearching && !_searchFailed && !_isCancelled) {
             _startExtendedSearch();
           }
         });
@@ -145,7 +171,8 @@ class _MatchingScreenState extends State<MatchingScreen>
     int extendedStep = 0;
     
     _searchTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
-      if (!mounted || _searchFailed) {
+      // FIXED: Check if cancelled in addition to other conditions
+      if (!mounted || _searchFailed || _isCancelled) {
         timer.cancel();
         return;
       }
@@ -155,10 +182,11 @@ class _MatchingScreenState extends State<MatchingScreen>
         _currentMessage = _noDriverMessages[extendedStep];
       });
       
-      // After extended search (about 30 seconds total), show failure
-      if (extendedStep == _noDriverMessages.length - 1) {
+      // Extended search now runs for 5 minutes to account for driver acceptance time
+      // After 5 minutes (about 75 cycles of 4 seconds), show failure
+      if (extendedStep >= 75) {
         timer.cancel();
-        if (_isSearching) {
+        if (_isSearching && !_isCancelled) {
           _handleSearchFailure('No drivers available in your area right now');
         }
       }
@@ -178,7 +206,15 @@ class _MatchingScreenState extends State<MatchingScreen>
           
       setState(() {
         _delivery = Delivery.fromJson(response);
+        // Load vehicle type for price breakdown calculations
+        if (response['vehicle_types'] != null) {
+          _vehicleType = VehicleType.fromJson(response['vehicle_types']);
+        }
       });
+      
+      // Debug: Check available drivers
+      await _debugAvailableDrivers();
+      
     } catch (e) {
       if (mounted) {
         ModernToast.error(
@@ -189,29 +225,275 @@ class _MatchingScreenState extends State<MatchingScreen>
       }
     }
   }
+  
+  Future<void> _debugAvailableDrivers() async {
+    try {
+      debugPrint('\n🔍 === DEBUGGING DRIVER AVAILABILITY ===');
+      
+      // Test basic Supabase connection
+      debugPrint('🔌 Testing Supabase connection...');
+      try {
+        // Test with a simple query to see what columns exist
+        final testQuery = await Supabase.instance.client
+            .from('driver_profiles')
+            .select('*')
+            .limit(1);
+        debugPrint('✅ Supabase connection successful. Test query returned: ${testQuery.length} records');
+        if (testQuery.isNotEmpty) {
+          debugPrint('📋 driver_profiles columns: ${testQuery.first.keys.toList()}');
+        }
+      } catch (e) {
+        debugPrint('❌ Supabase connection to driver_profiles failed: $e');
+      }
+      
+      // Test driver availability query
+      try {
+        final availableDrivers = await Supabase.instance.client
+            .from('driver_profiles')
+            .select('id, is_online, is_available, current_latitude, current_longitude, location_updated_at')
+            .eq('is_verified', true)
+            .eq('is_online', true)
+            .eq('is_available', true)
+            .not('current_latitude', 'is', null)
+            .not('current_longitude', 'is', null)
+            .limit(5);
+        debugPrint('✅ Available drivers query successful. Found: ${availableDrivers.length} drivers');
+      } catch (e) {
+        debugPrint('❌ Available drivers query failed: $e');
+        return;
+      }
+
+      // 🚨 NEW: Show ALL drivers in database (regardless of criteria)
+      debugPrint('\n🔍 === CHECKING ALL DRIVERS IN DATABASE ===');
+      try {
+        final allDrivers = await Supabase.instance.client
+            .from('driver_profiles')
+            .select('id, is_verified, is_online, is_available, current_latitude, current_longitude, location_updated_at, created_at')
+            .order('created_at', ascending: false)
+            .limit(10);
+        
+        debugPrint('📊 Total drivers in database: ${allDrivers.length}');
+        
+        if (allDrivers.isEmpty) {
+          debugPrint('❌ NO DRIVERS EXIST IN DATABASE!');
+          debugPrint('🔧 Driver app needs to create records in driver_profiles table');
+        } else {
+          debugPrint('📋 Driver records found:');
+          for (int i = 0; i < allDrivers.length; i++) {
+            final driver = allDrivers[i];
+            debugPrint('   Driver ${i + 1}:');
+            debugPrint('     ID: ${driver['id']}');
+            debugPrint('     is_verified: ${driver['is_verified']}');
+            debugPrint('     is_online: ${driver['is_online']}');
+            debugPrint('     is_available: ${driver['is_available']}');
+            debugPrint('     has_latitude: ${driver['current_latitude'] != null}');
+            debugPrint('     has_longitude: ${driver['current_longitude'] != null}');
+            debugPrint('     location_updated: ${driver['location_updated_at']}');
+            debugPrint('     created: ${driver['created_at']}');
+            
+            // Check if this driver meets all criteria
+            bool meetsAll = driver['is_verified'] == true &&
+                           driver['is_online'] == true &&
+                           driver['is_available'] == true &&
+                           driver['current_latitude'] != null &&
+                           driver['current_longitude'] != null;
+            debugPrint('     ✅ Meets all criteria: $meetsAll');
+            debugPrint('');
+          }
+        }
+      } catch (e) {
+        debugPrint('❌ Failed to check all drivers: $e');
+      }
+      
+      // Check delivery details first
+      if (_delivery != null) {
+        debugPrint('📦 Delivery ID: ${widget.deliveryId}');
+        debugPrint('📍 Pickup location: ${_delivery!.pickupLatitude}, ${_delivery!.pickupLongitude}');
+        debugPrint('📦 Delivery status: ${_delivery!.status}');
+        debugPrint('🚗 Current driver_id: ${_delivery!.driverId}');
+      } else {
+        debugPrint('❌ Delivery object is null!');
+      }
+      
+      // Check all drivers - try different column names
+      debugPrint('🔍 Attempting to discover column structure...');
+      
+      // Query all drivers with their current status from driver_profiles table
+      final allDrivers = await Supabase.instance.client
+          .from('driver_profiles')
+          .select('''
+            id, is_verified, is_online, is_available, 
+            current_latitude, current_longitude, location_updated_at,
+            rating, total_deliveries
+          ''')
+          .limit(20);
+      
+      debugPrint('👥 Total drivers in database: ${allDrivers.length}');
+      
+      if (allDrivers.isEmpty) {
+        debugPrint('❌ NO DRIVERS FOUND IN DATABASE!');
+        return;
+      }
+      
+      // Check available drivers using actual table structure
+      final availableDrivers = await Supabase.instance.client
+          .from('driver_profiles')
+          .select('id, is_verified, is_online, is_available, current_latitude, current_longitude, location_updated_at')
+          .eq('is_verified', true)
+          .eq('is_online', true)
+          .eq('is_available', true)
+          .not('current_latitude', 'is', null)
+          .not('current_longitude', 'is', null);
+      
+      debugPrint('✅ Available drivers (meeting all criteria): ${availableDrivers.length}');
+      
+      // Test the query that should match the corrected Edge Function
+      debugPrint('\n🎯 Testing corrected driver query...');
+      try {
+        final edgeFunctionQuery = await Supabase.instance.client
+            .from('driver_profiles')
+            .select('id, is_verified, is_online, is_available, current_latitude, current_longitude, location_updated_at, rating')
+            .eq('is_verified', true)
+            .eq('is_online', true)
+            .eq('is_available', true)
+            .not('current_latitude', 'is', null)
+            .not('current_longitude', 'is', null)
+            .order('location_updated_at', ascending: false)
+            .limit(10);
+        
+        debugPrint('🎯 Corrected query result: ${edgeFunctionQuery.length} drivers');
+        for (var driver in edgeFunctionQuery) {
+          debugPrint('   ✅ Driver ${driver['id']} - Lat: ${driver['current_latitude']}, Lng: ${driver['current_longitude']}, Updated: ${driver['location_updated_at']}');
+        }
+      } catch (e) {
+        debugPrint('❌ Corrected query failed: $e');
+      }
+      
+      debugPrint('\n📊 DRIVER ANALYSIS:');
+      int verifiedCount = 0;
+      int onlineCount = 0;
+      int availableCount = 0;
+      int withLocationCount = 0;
+      int meetingAllCriteriaCount = 0;
+      
+      for (var driver in allDrivers) {
+        final isVerified = driver['is_verified'] == true;
+        final isOnline = driver['is_online'] == true;
+        final isAvailable = driver['is_available'] == true;
+        final hasLatitude = driver['current_latitude'] != null;
+        final hasLongitude = driver['current_longitude'] != null;
+        final hasLocation = hasLatitude && hasLongitude;
+        final meetsAllCriteria = isVerified && isOnline && isAvailable && hasLocation;
+        
+        if (isVerified) verifiedCount++;
+        if (isOnline) onlineCount++;
+        if (isAvailable) availableCount++;
+        if (hasLocation) withLocationCount++;
+        if (meetsAllCriteria) meetingAllCriteriaCount++;
+        
+        final readyStatus = meetsAllCriteria ? '✅ READY' : '❌ NOT READY';
+        final statusText = isOnline && isAvailable ? 'ONLINE & AVAILABLE' : 
+                          isOnline ? 'ONLINE BUT BUSY' :
+                          isAvailable ? 'AVAILABLE BUT OFFLINE' : 'OFFLINE';
+        
+        debugPrint('🚗 Driver ${driver['id']}: $readyStatus');
+        debugPrint('   ✅ Verified: $isVerified | Status: $statusText | Location: $hasLocation');
+        if (hasLocation) {
+          debugPrint('   📍 Coords: ${driver['current_latitude']}, ${driver['current_longitude']}');
+          debugPrint('   ⏰ Updated: ${driver['location_updated_at']}');
+        }
+        debugPrint('');
+      }
+      
+      debugPrint('📈 SUMMARY:');
+      debugPrint('   👥 Total drivers: ${allDrivers.length}');
+      debugPrint('   🌐 Online: $onlineCount');
+      debugPrint('   ✅ Available: $availableCount');
+      debugPrint('   🔐 Verified: $verifiedCount');
+      debugPrint('   📍 With location: $withLocationCount');
+      debugPrint('   🎯 Meeting ALL criteria: $meetingAllCriteriaCount');
+      debugPrint('=== END DEBUG ===\n');
+      
+      if (_delivery != null) {
+        debugPrint('📍 Delivery pickup location: ${_delivery!.pickupLatitude}, ${_delivery!.pickupLongitude}');
+      }
+      
+    } catch (e) {
+      debugPrint('❌ Error checking drivers: $e');
+    }
+  }
 
   void _listenForDriverMatch() {
     // Listen for real-time updates on the delivery
-    Supabase.instance.client
+    _deliverySubscription = Supabase.instance.client
         .from('deliveries')
         .stream(primaryKey: ['id'])
         .eq('id', widget.deliveryId)
         .listen((data) {
+          // FIXED: Check if cancelled before processing any updates
+          if (_isCancelled || !mounted) return;
+          
           if (data.isNotEmpty) {
             final delivery = Delivery.fromJson(data.first);
-            if (delivery.status != 'pending') {
-              // Driver has been matched!
-              _onDriverMatched(delivery);
+            
+            // Handle different delivery statuses
+            if (!_isCancelled) {
+              if (delivery.status == 'driver_offered') {
+                // Driver has been offered the delivery, show waiting message
+                _onDriverOffered(delivery);
+              } else if (delivery.status == 'driver_assigned') {
+                // Driver has accepted the delivery!
+                _onDriverMatched(delivery);
+              } else if (delivery.status == 'cancelled') {
+                // Delivery was cancelled
+                _handleSearchFailure('Delivery was cancelled');
+              }
             }
           }
         });
   }
 
+  void _onDriverOffered(Delivery delivery) {
+    // Driver has been offered the delivery, show waiting for acceptance
+    if (!mounted || _isCancelled) return;
+    
+    setState(() {
+      _currentMessage = "Driver found! Waiting for acceptance...";
+      _isSearching = true; // Keep search animation but change message
+    });
+    
+    debugPrint('📨 Driver offered delivery, waiting for acceptance: ${delivery.driverId}');
+    
+    // Start 3-minute timeout for driver acceptance
+    _startDriverAcceptanceTimeout();
+  }
+
+  Timer? _acceptanceTimeoutTimer;
+  
+  void _startDriverAcceptanceTimeout() {
+    _acceptanceTimeoutTimer?.cancel();
+    
+    // Give driver 3 minutes to accept
+    _acceptanceTimeoutTimer = Timer(const Duration(minutes: 3), () {
+      if (mounted && !_isCancelled && _isSearching) {
+        debugPrint('⏰ Driver acceptance timeout - continuing search');
+        setState(() {
+          _currentMessage = "Driver didn't respond, finding another driver...";
+        });
+        
+        // Continue searching for another driver
+        _startDriverSearch();
+      }
+    });
+  }
+
   void _onDriverMatched(Delivery delivery) {
-    if (!mounted) return;
+    // FIXED: Double-check if cancelled or unmounted before showing dialog
+    if (!mounted || _isCancelled) return;
     
     // Stop search timers and mark as successful
     _searchTimer?.cancel();
+    _acceptanceTimeoutTimer?.cancel(); // Cancel acceptance timeout
     setState(() {
       _isSearching = false;
       _searchFailed = false;
@@ -225,8 +507,10 @@ class _MatchingScreenState extends State<MatchingScreen>
       barrierDismissible: false,
       builder: (context) => _buildMatchFoundDialog(delivery),
     ).then((_) {
-      // Navigate to tracking screen
-      context.go('/tracking/${delivery.id}');
+      // FIXED: Check again before navigation
+      if (!_isCancelled && mounted) {
+        context.go('/tracking/${delivery.id}');
+      }
     });
   }
 
@@ -387,6 +671,11 @@ class _MatchingScreenState extends State<MatchingScreen>
                 size: 20,
               ),
               onPressed: () {
+                // FIXED: Mark as cancelled immediately when user closes
+                _isCancelled = true;
+                _searchTimer?.cancel();
+                _deliverySubscription?.cancel();
+                
                 // Show confirmation dialog
                 _showCancelDialog();
               },
@@ -588,6 +877,77 @@ class _MatchingScreenState extends State<MatchingScreen>
           const Divider(color: AppTheme.dividerColor),
           const SizedBox(height: AppTheme.spacing16),
           
+          // Price breakdown (matching order summary screen)
+          if (_delivery!.distanceKm != null) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Base Fee',
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+                Text(
+                  '₱${_vehicleType?.basePrice.toStringAsFixed(2) ?? '0.00'}',
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Distance (${_delivery!.distanceKm!.toStringAsFixed(1)} km)',
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+                Text(
+                  '₱${(_vehicleType != null ? (_delivery!.distanceKm! * _vehicleType!.pricePerKm) : 0).toStringAsFixed(2)}',
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'VAT (12%)',
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+                Text(
+                  '₱${(_vehicleType != null ? _vehicleType!.calculateVAT(_delivery!.distanceKm!) : 0).toStringAsFixed(2)}',
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              height: 1,
+              color: AppTheme.dividerColor.withOpacity(0.3),
+            ),
+            const SizedBox(height: 12),
+          ],
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -595,17 +955,30 @@ class _MatchingScreenState extends State<MatchingScreen>
                 'Total Price',
                 style: GoogleFonts.inter(
                   fontSize: 16,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
                   color: AppTheme.textPrimary,
                 ),
               ),
-              Text(
-                '₱${_delivery!.totalPrice.toStringAsFixed(2)}',
-                style: GoogleFonts.inter(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: AppTheme.successColor,
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '₱${_delivery!.totalPrice.toStringAsFixed(2)}',
+                    style: GoogleFonts.inter(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.successColor,
+                    ),
+                  ),
+                  if (_vehicleType != null && _delivery!.distanceKm != null)
+                    Text(
+                      'Server calculated',
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        color: AppTheme.textTertiary,
+                      ),
+                    ),
+                ],
               ),
             ],
           ),
@@ -722,23 +1095,41 @@ class _MatchingScreenState extends State<MatchingScreen>
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: AppTheme.spacing20),
-              Row(
+              Column(
                 children: [
-                  Expanded(
-                    child: ModernButton(
-                      text: 'Try Again',
-                      onPressed: _retrySearch,
-                      icon: Icons.refresh_rounded,
-                      isSecondary: true,
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ModernButton(
+                          text: 'Try Again',
+                          onPressed: _retrySearch,
+                          icon: Icons.refresh_rounded,
+                          isSecondary: true,
+                        ),
+                      ),
+                      const SizedBox(width: AppTheme.spacing12),
+                      Expanded(
+                        child: ModernButton(
+                          text: 'Cancel',
+                          onPressed: () => _showCancelDialog(),
+                          icon: Icons.close_rounded,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: AppTheme.spacing12),
-                  Expanded(
-                    child: ModernButton(
-                      text: 'Cancel',
-                      onPressed: () => _showCancelDialog(),
-                      icon: Icons.close_rounded,
-                    ),
+                  const SizedBox(height: AppTheme.spacing12),
+                  ModernButton(
+                    text: 'Debug: Check Drivers',
+                    onPressed: () async {
+                      debugPrint('🔍 Debug button pressed!');
+                      try {
+                        await _debugAvailableDrivers();
+                      } catch (e) {
+                        debugPrint('❌ Debug button error: $e');
+                      }
+                    },
+                    icon: Icons.bug_report,
+                    isSecondary: true,
                   ),
                 ],
               ),
@@ -750,6 +1141,10 @@ class _MatchingScreenState extends State<MatchingScreen>
   }
 
   void _retrySearch() {
+    // Cancel any existing timers
+    _searchTimer?.cancel();
+    _acceptanceTimeoutTimer?.cancel();
+    
     setState(() {
       _isSearching = true;
       _searchFailed = false;
@@ -802,6 +1197,16 @@ class _MatchingScreenState extends State<MatchingScreen>
         actions: [
           TextButton(
             onPressed: () {
+              // FIXED: If user chooses to keep waiting, re-enable the search
+              setState(() {
+                _isCancelled = false;
+              });
+              
+              // Restart the listener if it was cancelled
+              if (_deliverySubscription == null) {
+                _listenForDriverMatch();
+              }
+              
               if (context.canPop()) {
                 context.pop();
               } else {
@@ -834,6 +1239,17 @@ class _MatchingScreenState extends State<MatchingScreen>
 
   Future<void> _cancelDelivery() async {
     try {
+      // FIXED: Mark as cancelled first to prevent any race conditions
+      setState(() {
+        _isCancelled = true;
+        _isSearching = false;
+      });
+      
+      // Cancel subscriptions and timers immediately
+      _searchTimer?.cancel();
+      _deliverySubscription?.cancel();
+      
+      // Update delivery status in database
       await Supabase.instance.client
           .from('deliveries')
           .update({'status': 'cancelled'})

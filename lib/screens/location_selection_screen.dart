@@ -131,7 +131,14 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
                 children: [
                   IconButton(
                     icon: const Icon(Icons.arrow_back_ios_rounded),
-                    onPressed: () => context.pop(),
+                    onPressed: () {
+                      // Try to pop first, if that fails, go to vehicle selection
+                      if (Navigator.of(context).canPop()) {
+                        context.pop();
+                      } else {
+                        context.go('/create-delivery');
+                      }
+                    },
                   ),
                   Expanded(
                     child: Column(
@@ -454,8 +461,51 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
               );
             },
           ),
+          
+          // Floating "My Location" button (bottom right)
+          Positioned(
+            bottom: MediaQuery.of(context).size.height * 0.4, // Above the bottom sheet
+            right: 20,
+            child: FloatingActionButton(
+              heroTag: "my_location", // Prevent hero tag conflicts
+              onPressed: _focusOnMyLocation,
+              backgroundColor: Colors.white,
+              foregroundColor: AppTheme.primaryBlue,
+              elevation: 8,
+              child: const Icon(Icons.my_location, size: 24),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  // Focus map on user's current location
+  void _focusOnMyLocation() async {
+    final mapState = _mapKey.currentState as dynamic;
+    if (mapState != null) {
+      try {
+        await mapState.focusOnUserLocation();
+        HapticFeedback.lightImpact();
+      } catch (e) {
+        print('Error focusing on user location: $e');
+        // Show a snackbar or toast to inform user
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Unable to get your location. Please check location permissions.',
+                style: GoogleFonts.inter(fontSize: 14),
+              ),
+              backgroundColor: AppTheme.errorColor,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          );
+        }
+      }
+    }
   }
 }

@@ -1,7 +1,6 @@
-// Enhanced Pair Driver Edge Function with Proximity Matching
+// Enhanced Pair Driver Edge Function with Driver App Integration
 // Finds closest available drivers and assigns directly to delivery
-// NOTE: This is a Deno Edge Function - VS Code errors about imports are expected
-// The code runs perfectly in Supabase Edge Runtime (Deno environment)
+// Updated: October 8, 2025 - Integration with driver app fixes
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -62,91 +61,62 @@ serve(async (req: Request) => {
       });
     }
 
-    // Find closest available drivers using PostGIS distance calculation
-    const { data: drivers, error: driversErr } = await supabase
-      .rpc('find_nearest_drivers', {
-        pickup_lat: delivery.pickup_latitude,
-        pickup_lng: delivery.pickup_longitude,
-        max_distance_km: 50, // 50km radius
-        limit_count: 5
-      });
+    console.log(`🔍 Searching for drivers near: ${delivery.pickup_latitude}, ${delivery.pickup_longitude}`);
 
-    if (driversErr) {
-      console.error('Error finding drivers with PostGIS, using fallback:', driversErr);
-      // Fallback to simple query without PostGIS if function doesn't exist
-      const { data: fallbackDrivers, error: fallbackErr } = await supabase
-        .from('driver_profiles')
-        .select(`
-          driver_id, current_latitude, current_longitude, is_online, is_available, 
-          location_updated_at, is_verified, name, profile_picture_url, 
-          vehicle_model, ltfrb_number, rating, total_rides
-        `)
-        .eq('is_online', true)
-        .eq('is_available', true)
-        .eq('is_verified', true) // Only verified drivers
-        .not('current_latitude', 'is', null)
-        .not('current_longitude', 'is', null)
-        .limit(10);
+    // Query using the actual database schema - all data is in driver_profiles
+    const { data: availableDrivers, error: driversErr } = await supabase
+      .from('driver_profiles')
+      .select(`
+        id, profile_picture_url, vehicle_model, ltfrb_number, rating, total_deliveries, is_verified,
+        current_latitude, current_longitude, is_online, is_available, location_updated_at
+      `)
+      .eq('is_available', true)                         // Driver is available
+      .eq('is_online', true)                            // Driver is online
+      .eq('is_verified', true)                          // Only verified drivers
+      .not('current_latitude', 'is', null)
+      .not('current_longitude', 'is', null)
+      .order('location_updated_at', { ascending: false })
+      .limit(10);
 
-      if (fallbackErr || !fallbackDrivers?.length) {
-        return new Response(JSON.stringify({ 
-          ok: false, 
-          message: "No available drivers found" 
-        }), {
-          headers: { 'content-type': 'application/json' },
-          status: 404,
-        });
-      }
+    console.log(`📊 Available drivers found: ${availableDrivers?.length || 0}`);
 
-      // Calculate distance manually for fallback
-      const driversWithDistance = fallbackDrivers.map((driver: any) => {
-        const distance = calculateDistance(
-          delivery.pickup_latitude, delivery.pickup_longitude,
-          driver.current_latitude, driver.current_longitude
-        );
-        return { ...driver, distance };
-      }).sort((a: any, b: any) => a.distance - b.distance).slice(0, 5);
-
-      console.log(`Found ${driversWithDistance.length} drivers (fallback method)`);
-      
-      // Assign to closest driver
-      const closestDriver = driversWithDistance[0];
-      await assignDriverToDelivery(supabase, body.deliveryId, closestDriver.driver_id);
-      
-      return new Response(JSON.stringify({ 
-        ok: true, 
-        delivery_id: body.deliveryId,
-        assigned_driver_id: closestDriver.driver_id,
-        drivers_found: driversWithDistance.length,
-        closest_driver_distance: closestDriver.distance
-      }), {
-        headers: { 'content-type': 'application/json' },
-        status: 200,
-      });
-    }
-
-    if (!drivers?.length) {
+    if (driversErr || !availableDrivers?.length) {
+      console.error('No available drivers found:', driversErr);
       return new Response(JSON.stringify({ 
         ok: false, 
-        message: "No available drivers found" 
+        message: "No available drivers found - drivers may be offline or busy" 
       }), {
         headers: { 'content-type': 'application/json' },
         status: 404,
       });
     }
 
-    console.log(`Found ${drivers.length} drivers within 50km radius`);
+    // Calculate distance for all available drivers
+    const driversWithDistance = availableDrivers.map((driver: any) => {
+      const distance = calculateDistance(
+        delivery.pickup_latitude, delivery.pickup_longitude,
+        driver.current_latitude, 
+        driver.current_longitude
+      );
+      return { ...driver, distance };
+    }).sort((a: any, b: any) => a.distance - b.distance);
+
+    console.log(`🎯 Closest driver: ${driversWithDistance[0]?.id || 'Unknown'} at ${driversWithDistance[0]?.distance?.toFixed(2)}km`);
+
+    // Offer delivery to closest driver with calculated pricing
+    const closestDriver = driversWithDistance[0];
+    await offerDeliveryToDriver(supabase, body.deliveryId, closestDriver.id, delivery.pickup_latitude, delivery.pickup_longitude);
     
-    // Assign to closest driver
-    const closestDriver = drivers[0];
-    await assignDriverToDelivery(supabase, body.deliveryId, closestDriver.driver_id);
+    console.log(`📨 Delivery offered to driver: ${closestDriver.id} for delivery: ${body.deliveryId}`);
 
     return new Response(JSON.stringify({ 
       ok: true, 
       delivery_id: body.deliveryId,
-      assigned_driver_id: closestDriver.driver_id,
-      drivers_found: drivers.length,
-      closest_driver_distance: closestDriver.distance || 0
+      offered_driver_id: closestDriver.id,
+      drivers_found: driversWithDistance.length,
+      closest_driver_distance: closestDriver.distance,
+      driver_name: 'Driver',
+      status: 'driver_offered'
     }), {
       headers: { 'content-type': 'application/json' },
       status: 200,
@@ -158,29 +128,88 @@ serve(async (req: Request) => {
   }
 });
 
-// Assign driver to delivery and update status
-async function assignDriverToDelivery(supabase: any, deliveryId: string, driverId: string) {
+// Offer delivery to driver (requires acceptance) with pricing calculation
+async function offerDeliveryToDriver(supabase: any, deliveryId: string, driverId: string, pickupLat: number, pickupLng: number) {
+  // First get delivery details to calculate pricing
+  const { data: deliveryData, error: deliveryError } = await supabase
+    .from('deliveries')
+    .select(`
+      vehicle_type_id, delivery_latitude, delivery_longitude,
+      vehicle_types!inner(base_price, price_per_km)
+    `)
+    .eq('id', deliveryId)
+    .single();
+
+  if (deliveryError || !deliveryData) {
+    console.error('Failed to get delivery data for pricing:', deliveryError);
+    throw new Error('Cannot calculate pricing');
+  }
+
+  // Calculate distance and pricing
+  const distanceKm = calculateDistance(
+    pickupLat, pickupLng,
+    deliveryData.delivery_latitude, deliveryData.delivery_longitude
+  );
+
+  const basePrice = Number(deliveryData.vehicle_types.base_price) || 0;
+  const pricePerKm = Number(deliveryData.vehicle_types.price_per_km) || 0;
+  const subtotal = basePrice + (pricePerKm * distanceKm);
+  
+  // Add 12% VAT (Philippine requirement)
+  const vatRate = 0.12;
+  const vat = subtotal * vatRate;
+  const totalAmount = Math.max(1, Math.round((subtotal + vat) * 100) / 100);
+
+  console.log(`💰 Calculated pricing: Distance ${distanceKm.toFixed(2)}km, Base ₱${basePrice}, Distance ₱${(pricePerKm * distanceKm).toFixed(2)}, VAT ₱${vat.toFixed(2)}, Total ₱${totalAmount.toFixed(2)}`);
+
+  // Update delivery with driver assignment, status, and calculated pricing
   const { error } = await supabase
     .from('deliveries')
     .update({
       driver_id: driverId,
-      status: 'driver_assigned',
+      status: 'driver_offered',  // Now using proper offer status
+      distance_km: Math.round(distanceKm * 10) / 10, // Round to 1 decimal
+      total_amount: totalAmount, // ✅ NOW CALCULATING PRICING!
       updated_at: new Date().toISOString()
     })
     .eq('id', deliveryId);
   
   if (error) {
-    console.error(`Failed to assign driver ${driverId} to delivery ${deliveryId}:`, error);
+    console.error(`Failed to offer delivery to driver ${driverId} for delivery ${deliveryId}:`, error);
     throw error;
   }
   
-  // Set driver as unavailable while on delivery
-  await supabase
-    .from('driver_profiles')
-    .update({ is_available: false })
+  // Driver stays available until they accept
+  // No need to set is_available = false yet
+  
+  console.log(`Successfully offered delivery ${deliveryId} to driver ${driverId} with pricing ₱${totalAmount}`);
+}
+
+// Called when driver accepts the delivery offer
+async function acceptDeliveryOffer(supabase: any, deliveryId: string, driverId: string) {
+  const { error } = await supabase
+    .from('deliveries')
+    .update({
+      status: 'driver_assigned',  // Now actually assigned
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', deliveryId)
     .eq('driver_id', driverId);
   
-  console.log(`Successfully assigned driver ${driverId} to delivery ${deliveryId}`);
+  if (error) {
+    console.error(`Failed to accept delivery ${deliveryId} by driver ${driverId}:`, error);
+    throw error;
+  }
+  
+  // Set driver as busy now that they've accepted
+  await supabase
+    .from('driver_profiles')
+    .update({ 
+      is_available: false
+    })
+    .eq('id', driverId);
+  
+  console.log(`Driver ${driverId} accepted delivery ${deliveryId}`);
 }
 
 // Record earnings when delivery is completed (called from delivery status updates)
@@ -229,7 +258,7 @@ async function recordDeliveryEarnings(supabase: any, deliveryId: string) {
     await supabase
       .from('driver_profiles')
       .update({ is_available: true })
-      .eq('driver_id', deliveryData.driver_id);
+      .eq('id', deliveryData.driver_id);
 
     // Trigger tip prompt for customer
     await supabase

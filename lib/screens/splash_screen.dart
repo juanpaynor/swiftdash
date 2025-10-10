@@ -13,11 +13,13 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with TickerProviderStateMixin {
-  late AnimationController _controller;
-  late AnimationController _pulseController;
+  late AnimationController _mainController;
+  late AnimationController _glowController;
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
-  late Animation<double> _pulseAnimation;
+  late Animation<double> _logoSlideAnimation;
+  late Animation<double> _textSlideAnimation;
+  late Animation<double> _glowAnimation;
   bool _isDisposed = false;
 
   @override
@@ -28,13 +30,15 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   void _initializeAnimations() {
-    _controller = AnimationController(
+    _mainController = AnimationController(
       duration: const Duration(milliseconds: 2500),
       vsync: this,
     );
 
-    _pulseController = AnimationController(
-      duration: const Duration(milliseconds: 1500),
+
+
+    _glowController = AnimationController(
+      duration: const Duration(milliseconds: 2000),
       vsync: this,
     );
 
@@ -42,7 +46,7 @@ class _SplashScreenState extends State<SplashScreen>
       begin: 0.0,
       end: 1.0,
     ).animate(CurvedAnimation(
-      parent: _controller,
+      parent: _mainController,
       curve: const Interval(0.0, 0.6, curve: Curves.easeOut),
     ));
 
@@ -50,30 +54,49 @@ class _SplashScreenState extends State<SplashScreen>
       begin: 0.3,
       end: 1.0,
     ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: const Interval(0.0, 0.8, curve: Curves.elasticOut),
+      parent: _mainController,
+      curve: const Interval(0.2, 0.8, curve: Curves.elasticOut),
     ));
 
-    _pulseAnimation = Tween<double>(
-      begin: 1.0,
-      end: 1.08,
+    _logoSlideAnimation = Tween<double>(
+      begin: 50.0,
+      end: 0.0,
     ).animate(CurvedAnimation(
-      parent: _pulseController,
+      parent: _mainController,
+      curve: const Interval(0.3, 0.9, curve: Curves.easeOutCubic),
+    ));
+
+    _textSlideAnimation = Tween<double>(
+      begin: 30.0,
+      end: 0.0,
+    ).animate(CurvedAnimation(
+      parent: _mainController,
+      curve: const Interval(0.5, 1.0, curve: Curves.easeOutCubic),
+    ));
+
+
+
+    _glowAnimation = Tween<double>(
+      begin: 0.3,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _glowController,
       curve: Curves.easeInOut,
     ));
   }
 
   void _startAnimation() async {
     try {
+      // Start all animations immediately for seamless experience
+
+      _glowController.repeat(reverse: true);
+      
       // Start main animation
-      await _controller.forward();
+      await _mainController.forward();
       
       if (!_isDisposed && mounted) {
-        // Start pulse animation after main animation
-        _pulseController.repeat(reverse: true);
-        
-        // Wait a bit then complete (reduced time for faster transition)
-        await Future.delayed(const Duration(milliseconds: 800));
+        // Minimal wait for production - just enough to show branding
+        await Future.delayed(const Duration(milliseconds: 600));
         
         if (!_isDisposed && mounted) {
           widget.onComplete();
@@ -86,8 +109,8 @@ class _SplashScreenState extends State<SplashScreen>
       }
     }
     
-    // Fallback timeout to ensure splash never gets stuck
-    Future.delayed(const Duration(seconds: 4), () {
+    // Fallback timeout - shorter for production
+    Future.delayed(const Duration(seconds: 2), () {
       if (!_isDisposed && mounted) {
         widget.onComplete();
       }
@@ -97,175 +120,183 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   void dispose() {
     _isDisposed = true;
-    _controller.dispose();
-    _pulseController.dispose();
+    _mainController.dispose();
+
+    _glowController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       body: Container(
         width: double.infinity,
         height: double.infinity,
         decoration: const BoxDecoration(
-          gradient: AppTheme.primaryGradient, // Use SwiftDash blue gradient
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color(0xFFFFFFFF), // Clean white background
+              Color(0xFFFAFBFC),
+            ],
+          ),
         ),
-        child: Column(
-          children: [
-            // Top spacer
-            const Spacer(flex: 2),
-            
-            // Main logo and branding section
-            AnimatedBuilder(
-              animation: _controller,
-              builder: (context, child) {
-                return FadeTransition(
-                  opacity: _fadeAnimation,
-                  child: ScaleTransition(
-                    scale: _scaleAnimation,
-                    child: Column(
-                      children: [
-                        // Animated logo with pulsing effect
-                        AnimatedBuilder(
-                          animation: _pulseController,
-                          builder: (context, child) {
-                            return Transform.scale(
-                              scale: _pulseAnimation.value,
-                              child: Container(
-                                width: 140,
-                                height: 140,
-                                decoration: BoxDecoration(
-                                  gradient: const LinearGradient(
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                    colors: [
-                                      Color(0xFFFFFFFF),
-                                      Color(0xFFF8FAFC),
-                                    ],
+        child: SafeArea(
+          child: Column(
+            children: [
+              const Spacer(flex: 3),
+              
+              // Clean minimalistic logo section
+              AnimatedBuilder(
+                animation: _mainController,
+                builder: (context, child) {
+                  return FadeTransition(
+                    opacity: _fadeAnimation,
+                    child: Transform.translate(
+                      offset: Offset(0, _logoSlideAnimation.value),
+                      child: ScaleTransition(
+                        scale: _scaleAnimation,
+                        child: Column(
+                          children: [
+                            // Clean SwiftDash logo with subtle animation
+                            AnimatedBuilder(
+                              animation: _glowController,
+                              builder: (context, child) {
+                                return Transform.scale(
+                                  scale: 1.0 + (_glowAnimation.value - 0.5) * 0.05, // Subtle breathing effect
+                                  child: Container(
+                                    width: 120,
+                                    height: 120,
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(30),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.08),
+                                          blurRadius: 30,
+                                          offset: const Offset(0, 15),
+                                        ),
+                                        BoxShadow(
+                                          color: AppTheme.primaryBlue.withOpacity(0.1),
+                                          blurRadius: 20,
+                                          offset: const Offset(0, 8),
+                                        ),
+                                      ],
+                                    ),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(14),
+                                      child: Image.asset(
+                                        'assets/images/swiftdash_logo.png',
+                                        width: 88,
+                                        height: 88,
+                                        fit: BoxFit.contain,
+                                      ),
+                                    ),
                                   ),
-                                  borderRadius: BorderRadius.circular(35),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.2),
-                                      blurRadius: 30,
-                                      offset: const Offset(0, 15),
-                                    ),
-                                    BoxShadow(
-                                      color: Colors.white.withOpacity(0.8),
-                                      blurRadius: 10,
-                                      offset: const Offset(0, -5),
-                                    ),
-                                  ],
-                                ),
-                                child: const Icon(
-                                  Icons.delivery_dining_rounded,
-                                  size: 70,
-                                  color: AppTheme.primaryBlue,
-                                ),
-                              ),
-                            );
-                          },
+                                );
+                              },
+                            ),
+                            
+                            const SizedBox(height: 32),
+                          ],
                         ),
-                        
-                        const SizedBox(height: 40),
-                        
-                        // App name with gradient text effect
-                        ShaderMask(
-                          shaderCallback: (bounds) => const LinearGradient(
-                            colors: [Colors.white, Color(0xFFE5E7EB)],
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                          ).createShader(bounds),
-                          child: Text(
+                      ),
+                    ),
+                  );
+                },
+              ),
+              
+              // Clean text section
+              AnimatedBuilder(
+                animation: _mainController,
+                builder: (context, child) {
+                  return Transform.translate(
+                    offset: Offset(0, _textSlideAnimation.value),
+                    child: FadeTransition(
+                      opacity: _fadeAnimation,
+                      child: Column(
+                        children: [
+                          // Clean app name
+                          Text(
                             'SwiftDash',
                             style: GoogleFonts.inter(
-                              fontSize: 42,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.white,
-                              letterSpacing: -1.2,
+                              fontSize: 36,
+                              fontWeight: FontWeight.w800,
+                              color: AppTheme.textPrimary,
+                              letterSpacing: -1.0,
                               height: 1.0,
                             ),
                           ),
-                        ),
-                        
-                        const SizedBox(height: 12),
-                        
-                        // Tagline
-                        Text(
-                          'Lightning Fast • Ultra Reliable',
-                          style: GoogleFonts.inter(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white.withOpacity(0.9),
-                            letterSpacing: 0.5,
+                          
+                          const SizedBox(height: 12),
+                          
+                          // Simple tagline
+                          Text(
+                            'Lightning Fast Delivery',
+                            style: GoogleFonts.inter(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              color: AppTheme.textSecondary,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+              
+              const Spacer(flex: 3),
+              
+              // Minimal loading section
+              AnimatedBuilder(
+                animation: _mainController,
+                builder: (context, child) {
+                  return FadeTransition(
+                    opacity: _fadeAnimation,
+                    child: Column(
+                      children: [
+                        // Simple loading indicator
+                        SizedBox(
+                          width: 28,
+                          height: 28,
+                          child: CircularProgressIndicator(
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              AppTheme.primaryBlue.withOpacity(0.8),
+                            ),
+                            strokeWidth: 2.5,
+                            strokeCap: StrokeCap.round,
                           ),
                         ),
                         
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 24),
                         
-                        // Subtitle
+                        // Loading text
                         Text(
-                          'Premium Delivery Experience',
+                          'Getting ready...',
                           style: GoogleFonts.inter(
                             fontSize: 14,
                             fontWeight: FontWeight.w500,
-                            color: Colors.white.withOpacity(0.7),
+                            color: AppTheme.textTertiary,
                             letterSpacing: 0.2,
                           ),
                         ),
                       ],
                     ),
-                  ),
-                );
-              },
-            ),
-            
-            const Spacer(flex: 2),
-            
-            // Bottom loading section
-            AnimatedBuilder(
-              animation: _controller,
-              builder: (context, child) {
-                return Opacity(
-                  opacity: _fadeAnimation.value,
-                  child: Column(
-                    children: [
-                      // Loading indicator
-                      const SizedBox(
-                        width: 40,
-                        height: 40,
-                        child: CircularProgressIndicator(
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            Colors.white,
-                          ),
-                          strokeWidth: 3,
-                        ),
-                      ),
-                      
-                      const SizedBox(height: 20),
-                      
-                      // Loading text
-                      Text(
-                        'Preparing your experience...',
-                        style: GoogleFonts.inter(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.white.withOpacity(0.8),
-                          letterSpacing: 0.3,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-            
-            // Bottom padding to account for system UI
-            SizedBox(height: MediaQuery.of(context).padding.bottom + 60),
-          ],
+                  );
+                },
+              ),
+              
+              const SizedBox(height: 60),
+            ],
+          ),
         ),
       ),
     );
   }
 }
+

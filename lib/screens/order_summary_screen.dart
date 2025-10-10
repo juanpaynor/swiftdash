@@ -126,18 +126,43 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
         backgroundColor: AppTheme.backgroundColor,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_rounded),
+          icon: const Icon(Icons.arrow_back_ios_rounded, color: AppTheme.textPrimary),
           onPressed: () => context.pop(),
         ),
-        title: Text(
-          'Order Summary',
-          style: GoogleFonts.inter(
-            fontSize: 20,
-            fontWeight: FontWeight.w700,
-            color: AppTheme.textPrimary,
-          ),
+        title: Column(
+          children: [
+            Text(
+              'Order Summary',
+              style: GoogleFonts.inter(
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+            Text(
+              'Step 3 of 3',
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+          ],
         ),
         centerTitle: true,
+        // Add progress indicator
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(8),
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 40),
+            child: LinearProgressIndicator(
+              value: 1.0, // Step 3 of 3
+              backgroundColor: AppTheme.dividerColor,
+              valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primaryBlue),
+              minHeight: 3,
+            ),
+          ),
+        ),
       ),
       body: _isLoading
           ? const Center(
@@ -184,15 +209,27 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
 
   Widget _buildRouteCard() {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white,
+            Colors.white.withOpacity(0.95),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
             color: AppTheme.shadowLight,
-            blurRadius: 8,
-            offset: const Offset(0, 2),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+          BoxShadow(
+            color: AppTheme.primaryBlue.withOpacity(0.05),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
           ),
         ],
       ),
@@ -201,111 +238,232 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
         children: [
           Row(
             children: [
-              Icon(
-                vehicleType.icon,
-                color: AppTheme.primaryBlue,
-                size: 24,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  vehicleType.name,
-                  style: GoogleFonts.inter(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: AppTheme.textPrimary,
-                  ),
-                ),
-              ),
-              if (_distance != null)
-                Text(
-                  '${_distance!.toStringAsFixed(1)} km',
-                  style: GoogleFonts.inter(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.primaryBlue,
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          
-          // Pickup location
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
               Container(
-                width: 8,
-                height: 8,
-                margin: const EdgeInsets.only(top: 6),
-                decoration: const BoxDecoration(
-                  color: AppTheme.successColor,
-                  shape: BoxShape.circle,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryBlue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(
+                  vehicleType.icon,
+                  color: AppTheme.primaryBlue,
+                  size: 28,
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Pickup',
+                      vehicleType.name,
                       style: GoogleFonts.inter(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.successColor,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary,
                       ),
                     ),
                     Text(
-                      pickupAddress,
+                      'Max ${vehicleType.maxWeightKg}kg capacity',
                       style: GoogleFonts.inter(
                         fontSize: 14,
-                        color: AppTheme.textPrimary,
+                        fontWeight: FontWeight.w500,
+                        color: AppTheme.textSecondary,
                       ),
                     ),
                   ],
                 ),
               ),
+              if (_distance != null) ...[
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: AppTheme.primaryBlue,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '${_distance!.toStringAsFixed(1)} km',
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '≈ ${(_distance! * 2.5 + 10).round()} mins', // Rough ETA calculation
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
+          const SizedBox(height: 20),
           
-          const SizedBox(height: 12),
-          
-          // Delivery location
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          // Route visualization with connecting line
+          Column(
             children: [
-              Container(
-                width: 8,
-                height: 8,
-                margin: const EdgeInsets.only(top: 6),
-                decoration: const BoxDecoration(
-                  color: AppTheme.errorColor,
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Delivery',
-                      style: GoogleFonts.inter(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.errorColor,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Column(
+                    children: [
+                      Container(
+                        width: 16,
+                        height: 16,
+                        decoration: BoxDecoration(
+                          color: AppTheme.successColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppTheme.successColor.withOpacity(0.3),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    Text(
-                      deliveryAddress,
-                      style: GoogleFonts.inter(
-                        fontSize: 14,
-                        color: AppTheme.textPrimary,
+                      Container(
+                        width: 3,
+                        height: 40,
+                        margin: const EdgeInsets.symmetric(vertical: 4),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              AppTheme.successColor,
+                              AppTheme.errorColor,
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
                       ),
+                      Container(
+                        width: 16,
+                        height: 16,
+                        decoration: BoxDecoration(
+                          color: AppTheme.errorColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppTheme.errorColor.withOpacity(0.3),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: AppTheme.successColor.withOpacity(0.05),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: AppTheme.successColor.withOpacity(0.2),
+                              width: 1,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.my_location,
+                                    size: 16,
+                                    color: AppTheme.successColor,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Pickup Location',
+                                    style: GoogleFonts.inter(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppTheme.successColor,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                pickupAddress,
+                                style: GoogleFonts.inter(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                  color: AppTheme.textPrimary,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: AppTheme.errorColor.withOpacity(0.05),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: AppTheme.errorColor.withOpacity(0.2),
+                              width: 1,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.location_on,
+                                    size: 16,
+                                    color: AppTheme.errorColor,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Delivery Location',
+                                    style: GoogleFonts.inter(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppTheme.errorColor,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                deliveryAddress,
+                                style: GoogleFonts.inter(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w500,
+                                  color: AppTheme.textPrimary,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -425,18 +583,48 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
   }
 
   Widget _buildContactSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Contact Information',
-          style: GoogleFonts.inter(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            color: AppTheme.textPrimary,
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.shadowLight,
+            blurRadius: 12,
+            offset: const Offset(0, 4),
           ),
-        ),
-        const SizedBox(height: 16),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryBlue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.contacts_rounded,
+                  color: AppTheme.primaryBlue,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Contact Information',
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
         
         Text(
           'Pickup Contact',
@@ -459,11 +647,20 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
         
         ModernTextField(
           label: 'Contact Phone',
-          hintText: '+639601234567',
+          hintText: '+63 9XX XXX XXXX',
           controller: _pickupContactPhoneController,
           keyboardType: TextInputType.phone,
           prefixIcon: Icons.phone_outlined,
-          validator: (v) => v?.isEmpty ?? true ? 'Phone number is required' : null,
+          validator: (v) {
+            if (v?.isEmpty ?? true) return 'Phone number is required';
+            // Basic Philippine number validation
+            final cleanNumber = v!.replaceAll(RegExp(r'[^\d+]'), '');
+            if (!cleanNumber.startsWith('+63') && !cleanNumber.startsWith('09')) {
+              return 'Please enter a valid Philippine number';
+            }
+            if (cleanNumber.length < 11) return 'Phone number too short';
+            return null;
+          },
         ),
         const SizedBox(height: 12),
         
@@ -498,11 +695,20 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
         
         ModernTextField(
           label: 'Contact Phone',
-          hintText: '+639601234567',
+          hintText: '+63 9XX XXX XXXX',
           controller: _deliveryContactPhoneController,
           keyboardType: TextInputType.phone,
           prefixIcon: Icons.phone_outlined,
-          validator: (v) => v?.isEmpty ?? true ? 'Phone number is required' : null,
+          validator: (v) {
+            if (v?.isEmpty ?? true) return 'Phone number is required';
+            // Basic Philippine number validation
+            final cleanNumber = v!.replaceAll(RegExp(r'[^\d+]'), '');
+            if (!cleanNumber.startsWith('+63') && !cleanNumber.startsWith('09')) {
+              return 'Please enter a valid Philippine number';
+            }
+            if (cleanNumber.length < 11) return 'Phone number too short';
+            return null;
+          },
         ),
         const SizedBox(height: 12),
         
@@ -513,27 +719,93 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
           prefixIcon: Icons.note_outlined,
           maxLines: 2,
         ),
-      ],
+        ],
+      ),
     );
   }
 
   Widget _buildPackageSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Package Details',
-          style: GoogleFonts.inter(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            color: AppTheme.textPrimary,
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.shadowLight,
+            blurRadius: 12,
+            offset: const Offset(0, 4),
           ),
-        ),
-        const SizedBox(height: 16),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.infoColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.inventory_2_rounded,
+                  color: AppTheme.infoColor,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Package Details',
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          
+          // Package size guidelines
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppTheme.infoColor.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: AppTheme.infoColor.withOpacity(0.2),
+                width: 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  color: AppTheme.infoColor,
+                  size: 20,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Max weight: ${vehicleType.maxWeightKg}kg • Please ensure package is properly secured',
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          const SizedBox(height: 20),
         
         ModernTextField(
           label: 'Package Description',
-          hintText: 'What are you sending?',
+          hintText: 'e.g., Documents, Food, Electronics',
           controller: _packageDescriptionController,
           prefixIcon: Icons.inventory_2_outlined,
           validator: (v) => v?.isEmpty ?? true ? 'Package description is required' : null,
@@ -580,7 +852,8 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
             ),
           ],
         ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -997,36 +1270,78 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
   Widget _buildBookButton() {
     final isDigitalPayment = _selectedPaymentMethod.isDigital;
     final buttonText = _getBookButtonText();
+    final buttonColor = isDigitalPayment ? AppTheme.primaryBlue : AppTheme.successColor;
     
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton(
-        onPressed: (_distance != null && _price != null && !_isBooking) ? _handleBookDelivery : null,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: isDigitalPayment ? AppTheme.primaryBlue : AppTheme.successColor,
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 20),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: buttonColor.withOpacity(0.3),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
           ),
-          elevation: 0,
-        ),
-        child: _isBooking 
-          ? const SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-              ),
-            )
-          : Text(
-              buttonText,
-              style: GoogleFonts.inter(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-              ),
+          BoxShadow(
+            color: buttonColor.withOpacity(0.1),
+            blurRadius: 40,
+            offset: const Offset(0, 16),
+          ),
+        ],
+      ),
+      child: SizedBox(
+        width: double.infinity,
+        child: ElevatedButton(
+          onPressed: (_distance != null && _price != null && !_isBooking) ? _handleBookDelivery : null,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: buttonColor,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 20),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
             ),
+            elevation: 0,
+          ),
+          child: _isBooking 
+            ? Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Text(
+                    'Processing...',
+                    style: GoogleFonts.inter(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              )
+            : Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    isDigitalPayment ? Icons.payment : Icons.local_shipping,
+                    size: 24,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    buttonText,
+                    style: GoogleFonts.inter(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+        ),
       ),
     );
   }

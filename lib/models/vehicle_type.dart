@@ -72,12 +72,15 @@ class VehicleType {
     switch (name.toLowerCase()) {
       case 'motorcycle':
         return Icons.motorcycle;
+      case 'vehicle':
       case 'car':
         return Icons.directions_car;
+      case 'pickup':
+        return Icons.local_shipping;
       case 'van':
         return Icons.local_shipping;
       case 'truck':
-        return Icons.fire_truck; // or Icons.local_shipping if unavailable
+        return Icons.fire_truck;
       default:
         return Icons.delivery_dining;
     }

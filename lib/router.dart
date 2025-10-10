@@ -1,17 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:myapp/models/vehicle_type.dart';
-import 'package:myapp/screens/home_screen.dart';
-import 'package:myapp/screens/login_screen.dart';
-import 'package:myapp/screens/signup_screen.dart';
-import 'package:myapp/screens/tracking_screen.dart';
-import 'package:myapp/screens/addresses_screen.dart';
-import 'package:myapp/screens/vehicle_selection_screen.dart';
-import 'package:myapp/screens/location_selection_screen.dart';
-import 'package:myapp/screens/order_summary_screen.dart';
-import 'package:myapp/screens/matching_screen.dart';
-import 'package:myapp/screens/profile_edit_screen.dart';
+import 'package:swiftdash/models/vehicle_type.dart';
+import 'package:swiftdash/screens/home_screen.dart';
+import 'package:swiftdash/screens/login_screen.dart';
+import 'package:swiftdash/screens/signup_screen.dart';
+import 'package:swiftdash/screens/tracking_screen.dart';
+import 'package:swiftdash/screens/addresses_screen.dart';
+import 'package:swiftdash/screens/vehicle_selection_screen.dart';
+import 'package:swiftdash/screens/location_selection_screen.dart';
+import 'package:swiftdash/screens/order_summary_screen.dart';
+import 'package:swiftdash/screens/matching_screen.dart';
+import 'package:swiftdash/screens/profile_edit_screen.dart';
 
 final GoRouter router = GoRouter(
   initialLocation: '/',

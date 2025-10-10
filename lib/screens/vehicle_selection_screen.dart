@@ -50,14 +50,8 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen>
           .map((type) => VehicleType.fromJson(type))
           .toList();
       
-      // Sort: motorcycle first, truck last
-      types.sort((a, b) {
-        if (a.name.toLowerCase() == 'motorcycle') return -1;
-        if (b.name.toLowerCase() == 'motorcycle') return 1;
-        if (a.name.toLowerCase() == 'truck') return 1;
-        if (b.name.toLowerCase() == 'truck') return -1;
-        return 0;
-      });
+      // Sort by price (lowest to highest)
+      types.sort((a, b) => a.basePrice.compareTo(b.basePrice));
       
       setState(() {
         _vehicleTypes = types;
@@ -107,7 +101,7 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen>
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_rounded),
-          onPressed: () => context.pop(),
+          onPressed: () => context.go('/home'),
         ),
         title: Text(
           'Choose Vehicle',
@@ -228,6 +222,9 @@ class VehicleSelectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isSmallScreen = screenWidth < 360;
+    
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -259,140 +256,152 @@ class VehicleSelectionCard extends StatelessWidget {
           onTap: onSelect,
           borderRadius: BorderRadius.circular(16),
           child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Row(
+            padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Vehicle icon
-                Container(
-                  width: 60,
-                  height: 60,
-                  decoration: BoxDecoration(
-                    color: isSelected 
-                        ? AppTheme.primaryBlue.withOpacity(0.1) 
-                        : AppTheme.dividerColor.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Icon(
-                    vehicleType.icon,
-                    size: 32,
-                    color: isSelected ? AppTheme.primaryBlue : AppTheme.textSecondary,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                
-                // Vehicle details
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        vehicleType.name,
-                        style: GoogleFonts.inter(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: AppTheme.textPrimary,
-                        ),
+                // Top row: Icon, Details, and Price
+                Row(
+                  children: [
+                    // Vehicle icon
+                    Container(
+                      width: isSmallScreen ? 50 : 60,
+                      height: isSmallScreen ? 50 : 60,
+                      decoration: BoxDecoration(
+                        color: isSelected 
+                            ? AppTheme.primaryBlue.withOpacity(0.1) 
+                            : AppTheme.dividerColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(16),
                       ),
-                      if (vehicleType.description != null) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          vehicleType.description!,
-                          style: GoogleFonts.inter(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w400,
-                            color: AppTheme.textSecondary,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                      const SizedBox(height: 8),
-                      
-                      // Vehicle specs
-                      Row(
+                      child: Icon(
+                        vehicleType.icon,
+                        size: isSmallScreen ? 28 : 32,
+                        color: isSelected ? AppTheme.primaryBlue : AppTheme.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    
+                    // Vehicle details
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppTheme.infoLight,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  Icons.fitness_center,
-                                  size: 12,
-                                  color: AppTheme.infoColor,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'Max ${vehicleType.maxWeightKg}kg',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppTheme.infoColor,
-                                  ),
-                                ),
-                              ],
+                          Text(
+                            vehicleType.name,
+                            style: GoogleFonts.inter(
+                              fontSize: isSmallScreen ? 16 : 18,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.textPrimary,
                             ),
                           ),
-                          if (isSelected) ...[
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
+                          if (vehicleType.description != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              vehicleType.description!,
+                              style: GoogleFonts.inter(
+                                fontSize: isSmallScreen ? 12 : 14,
+                                fontWeight: FontWeight.w400,
+                                color: AppTheme.textSecondary,
                               ),
-                              decoration: BoxDecoration(
-                                color: AppTheme.primaryBlue,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                'Selected',
-                                style: GoogleFonts.inter(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white,
-                                ),
-                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ],
                         ],
                       ),
-                    ],
-                  ),
+                    ),
+                    
+                    // Price
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          '₱${vehicleType.basePrice.toStringAsFixed(2)}',
+                          style: GoogleFonts.inter(
+                            fontSize: isSmallScreen ? 16 : 18,
+                            fontWeight: FontWeight.w700,
+                            color: isSelected ? AppTheme.primaryBlue : AppTheme.textPrimary,
+                          ),
+                        ),
+                        Text(
+                          'Base fare',
+                          style: GoogleFonts.inter(
+                            fontSize: isSmallScreen ? 10 : 12,
+                            fontWeight: FontWeight.w400,
+                            color: AppTheme.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
                 
-                // Pricing
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                const SizedBox(height: 12),
+                
+                // Bottom section: Vehicle specs using Wrap for responsiveness
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
                   children: [
-                    Text(
-                      '₱${vehicleType.basePrice.toStringAsFixed(0)}',
-                      style: GoogleFonts.inter(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                        color: isSelected ? AppTheme.primaryBlue : AppTheme.textPrimary,
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppTheme.infoLight,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.fitness_center,
+                            size: 12,
+                            color: AppTheme.infoColor,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Max ${vehicleType.maxWeightKg}kg',
+                            style: GoogleFonts.inter(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.infoColor,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    Text(
-                      '+₱${vehicleType.pricePerKm.toStringAsFixed(0)}/km',
-                      style: GoogleFonts.inter(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: AppTheme.textSecondary,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
                     if (isSelected)
-                      const Icon(
-                        Icons.check_circle,
-                        color: AppTheme.primaryBlue,
-                        size: 24,
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primaryBlue,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.check_circle,
+                              size: 12,
+                              color: Colors.white,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Selected',
+                              style: GoogleFonts.inter(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                   ],
                 ),
