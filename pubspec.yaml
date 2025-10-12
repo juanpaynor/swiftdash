@@ -61,6 +61,7 @@ dependencies:
   
   # Enhanced UI Components
   flutter_svg: ^2.0.10+1
+  vector_graphics: ^1.1.11+1
   cached_network_image: ^3.3.1
   carousel_slider: ^5.0.0
   smooth_page_indicator: ^1.2.0+3
@@ -125,6 +126,7 @@ flutter:
     - assets/icons/
     - assets/lottie/
     - assets/rive/
+    - assets/vehicle_icons/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/realtime_service.dart';
 import '../services/delivery_service.dart';
 import '../models/delivery.dart';
 import '../widgets/shared_delivery_map.dart';
+import '../utils/back_button_handler.dart';
 
 /// Uber-style tracking screen with full-screen map and floating overlay cards
 /// 
@@ -37,7 +39,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   
   Delivery? _delivery;
   Map<String, dynamic>? _driverLocation;
-  Map<String, dynamic>? _driverStatus;
+  Map<String, dynamic>? _driverProfile;
   bool _isLoading = true;
   String? _error;
 
@@ -70,6 +72,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
         _isLoading = false;
       });
 
+      // Fetch driver profile information if driver is assigned
+      if (delivery.driverId != null) {
+        await _fetchDriverProfile(delivery.driverId!);
+      }
+
       // Subscribe to real-time updates
       await _subscribeToUpdates();
       
@@ -85,18 +92,57 @@ class _TrackingScreenState extends State<TrackingScreen> {
     if (_delivery == null) return;
 
     try {
+      debugPrint('🔧 TrackingScreen: Setting up subscriptions for delivery: ${widget.deliveryId}');
+      
       // Subscribe to driver location broadcasts
       await _realtimeService.subscribeToDriverLocation(widget.deliveryId);
+      debugPrint('🔧 TrackingScreen: Location subscription setup complete');
+      
+      // Start a timer to detect if no location updates are received
+      Timer(const Duration(seconds: 30), () {
+        if (mounted && _driverLocation == null && _delivery?.status == 'driver_assigned') {
+          debugPrint('⚠️ No driver location updates received after 30 seconds');
+          debugPrint('⚠️ This suggests the driver app is not broadcasting location');
+        }
+      });
+      
       _locationSubscription = _realtimeService.driverLocationUpdates.listen(
         (location) {
+          debugPrint('🎯 TrackingScreen: Location update received from stream');
+          debugPrint('🎯 Expected deliveryId: ${widget.deliveryId}');
+          debugPrint('🎯 Received deliveryId: ${location['deliveryId']}');
+          debugPrint('🎯 Mounted: $mounted');
+          debugPrint('🎯 Location data: $location');
+          
           if (mounted && location['deliveryId'] == widget.deliveryId) {
+            debugPrint('✅ TrackingScreen: Processing location update');
             _updateDriverLocation(location);
+          } else {
+            debugPrint('⏭️ TrackingScreen: Skipping location update (wrong delivery or unmounted)');
           }
         },
         onError: (error) {
-          debugPrint('Location subscription error: $error');
+          debugPrint('❌ Location subscription error: $error');
         },
       );
+      
+      // Log subscription activity every 10 seconds to monitor WebSocket
+      Timer.periodic(const Duration(seconds: 10), (timer) {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+        
+        debugPrint('📊 WebSocket Status Check:');
+        debugPrint('   - Subscribed to: driver-location-${widget.deliveryId}');
+        debugPrint('   - Driver location received: ${_driverLocation != null ? 'YES' : 'NO'}');
+        debugPrint('   - Delivery status: ${_delivery?.status}');
+        debugPrint('   - Expected driver: ${_delivery?.driverId}');
+        
+        if (_driverLocation == null && (_delivery?.status == 'driver_assigned' || _delivery?.status == 'going_to_pickup')) {
+          debugPrint('⚠️ No driver location updates - check if driver app is broadcasting');
+        }
+      });
 
       // Subscribe to delivery status updates
       await _realtimeService.subscribeToDelivery(widget.deliveryId);
@@ -130,7 +176,60 @@ class _TrackingScreenState extends State<TrackingScreen> {
     }
   }
 
+  // Fetch complete driver profile information
+  Future<void> _fetchDriverProfile(String driverId) async {
+    try {
+      debugPrint('🔧 Fetching driver profile for: $driverId');
+      
+      final response = await Supabase.instance.client
+          .from('driver_profiles')
+          .select('''
+            id,
+            profile_picture_url,
+            vehicle_model,
+            plate_number,
+            rating,
+            total_deliveries,
+            is_verified,
+            vehicle_types!inner(name)
+          ''')
+          .eq('id', driverId)
+          .single();
+      
+      // Also get user profile for driver name
+      final userResponse = await Supabase.instance.client
+          .from('user_profiles')
+          .select('first_name, last_name')
+          .eq('id', driverId)
+          .single();
+      
+      setState(() {
+        _driverProfile = {
+          ...response,
+          'first_name': userResponse['first_name'],
+          'last_name': userResponse['last_name'],
+          'full_name': '${userResponse['first_name']} ${userResponse['last_name']}',
+        };
+      });
+      
+      debugPrint('✅ Driver profile loaded: ${_driverProfile?['full_name']}');
+    } catch (e) {
+      debugPrint('❌ Failed to fetch driver profile: $e');
+      // Don't set error state, just continue without driver profile
+    }
+  }
+
   void _updateDriverLocation(Map<String, dynamic> location) {
+    debugPrint('🚗 TrackingScreen: _updateDriverLocation called');
+    debugPrint('🚗 Raw location data: $location');
+    debugPrint('🚗 Location keys: ${location.keys.toList()}');
+    debugPrint('🚗 Location values: ${location.values.toList()}');
+    
+    // Log current state before update
+    debugPrint('🚗 Previous _driverLocation: $_driverLocation');
+    debugPrint('🚗 Current delivery status: ${_delivery?.status}');
+    debugPrint('🚗 Widget mounted: $mounted');
+    
     setState(() {
       _driverLocation = location;
     });
@@ -138,14 +237,29 @@ class _TrackingScreenState extends State<TrackingScreen> {
     final lat = location['latitude']?.toDouble();
     final lng = location['longitude']?.toDouble();
     
+    debugPrint('🚗 Parsed coordinates: lat=$lat, lng=$lng');
+    
     if (lat != null && lng != null) {
-      // Update driver marker on SharedDeliveryMap
-      debugPrint('📍 Driver location updated: $lat, $lng');
+      debugPrint('✅ Driver location updated successfully');
+      debugPrint('🗺️ Map will receive driverLatitude: $lat, driverLongitude: $lng');
+      debugPrint('🗺️ Delivery coordinates - pickup: (${_delivery?.pickupLatitude}, ${_delivery?.pickupLongitude})');
+      debugPrint('🗺️ Delivery coordinates - delivery: (${_delivery?.deliveryLatitude}, ${_delivery?.deliveryLongitude})');
       
-      // Trigger map update by calling setState
-      // The SharedDeliveryMap will automatically update the driver marker
-      // when _driverLocation changes in the build method
+      // Force a rebuild to ensure map gets updated coordinates
+      debugPrint('🔄 Triggering UI rebuild for map update...');
+    } else {
+      debugPrint('❌ Invalid coordinates received: lat=$lat, lng=$lng');
+      debugPrint('❌ Full location object: $location');
+      debugPrint('❌ Raw latitude value: ${location['latitude']} (${location['latitude']?.runtimeType})');
+      debugPrint('❌ Raw longitude value: ${location['longitude']} (${location['longitude']?.runtimeType})');
     }
+    
+    // Additional debug info about map state
+    debugPrint('🗺️ SharedDeliveryMap will receive:');
+    debugPrint('   - driverLatitude: ${_driverLocation?['latitude']?.toDouble()}');
+    debugPrint('   - driverLongitude: ${_driverLocation?['longitude']?.toDouble()}');
+    debugPrint('   - deliveryStatus: ${_delivery?.status}');
+    debugPrint('   - driverVehicleType: ${_driverProfile?['vehicle_types']?['name']}');
   }
 
   void _updateDeliveryStatus(Map<String, dynamic> deliveryData) {
@@ -167,32 +281,48 @@ class _TrackingScreenState extends State<TrackingScreen> {
   }
 
   void _showStatusUpdateNotification(String newStatus) {
-    String message;
-    Color backgroundColor;
+    final String message;
+    final Color backgroundColor;
     
     switch (newStatus) {
+      case 'driver_offered':
+        message = 'Driver found - waiting for acceptance';
+        backgroundColor = Colors.amber;
+        break;
       case 'driver_assigned':
-        message = '🚗 Driver assigned and preparing for pickup';
+        message = 'Driver assigned and preparing for pickup';
+        backgroundColor = Colors.blue;
+        break;
+      case 'going_to_pickup':
+        message = 'Driver is heading to pickup location';
         backgroundColor = Colors.blue;
         break;
       case 'pickup_arrived':
-        message = '📍 Driver has arrived at pickup location';
+        message = 'Driver has arrived at pickup location';
         backgroundColor = Colors.orange;
         break;
       case 'package_collected':
-        message = '📦 Package collected - heading your way!';
+        message = 'Package collected - heading your way!';
         backgroundColor = Colors.purple;
         break;
+      case 'going_to_destination':
+        message = 'Driver is on the way to you';
+        backgroundColor = Colors.green;
+        break;
+      case 'at_destination':
+        message = 'Driver has arrived at your location';
+        backgroundColor = Colors.amber;
+        break;
       case 'in_transit':
-        message = '🚚 Your delivery is on the way';
+        message = 'Your delivery is on the way';
         backgroundColor = Colors.green;
         break;
       case 'delivered':
-        message = '✅ Delivery completed successfully!';
+        message = 'Delivery completed successfully!';
         backgroundColor = Colors.green;
         break;
       case 'cancelled':
-        message = '❌ Delivery has been cancelled';
+        message = 'Delivery has been cancelled';
         backgroundColor = Colors.red;
         break;
       default:
@@ -223,7 +353,8 @@ class _TrackingScreenState extends State<TrackingScreen> {
 
   void _updateDriverStatus(Map<String, dynamic> driverData) {
     setState(() {
-      _driverStatus = driverData;
+      // Update driver profile with latest data
+      _driverProfile = {...?_driverProfile, ...driverData};
     });
   }
 
@@ -370,10 +501,16 @@ class _TrackingScreenState extends State<TrackingScreen> {
         return 'Driver found - waiting for acceptance';
       case 'driver_assigned':
         return 'Driver is preparing for pickup';
+      case 'going_to_pickup':
+        return 'Driver is heading to pickup location';
       case 'pickup_arrived':
         return 'Driver has arrived at pickup';
       case 'package_collected':
         return 'Package collected - heading to delivery';
+      case 'going_to_destination':
+        return 'Driver is on the way to you';
+      case 'at_destination':
+        return 'Driver has arrived at your location';
       case 'in_transit':
         return 'Your delivery is on the way';
       case 'delivered':
@@ -396,9 +533,12 @@ class _TrackingScreenState extends State<TrackingScreen> {
       case 'driver_offered':
         return Colors.amber;
       case 'driver_assigned':
+      case 'going_to_pickup':
       case 'pickup_arrived':
         return Colors.blue;
       case 'package_collected':
+      case 'going_to_destination':
+      case 'at_destination':
       case 'in_transit':
         return Colors.purple;
       case 'delivered':
@@ -436,8 +576,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
       );
     }
 
-    return Scaffold(
-      body: Stack(
+    return SmartBackHandler(
+      child: Scaffold(
+        body: Stack(
         children: [
           // Full-screen live map (Uber/DoorDash style)
           _buildFullScreenMap(),
@@ -449,11 +590,17 @@ class _TrackingScreenState extends State<TrackingScreen> {
           _buildDraggableBottomSheet(),
         ],
       ),
-    );
+    ));
   }
 
   // Full-screen map with real-time driver tracking
   Widget _buildFullScreenMap() {
+    debugPrint('🔍 Building SharedDeliveryMap with:');
+    debugPrint('   - driverLatitude: ${_driverLocation?['latitude']?.toDouble()}');
+    debugPrint('   - driverLongitude: ${_driverLocation?['longitude']?.toDouble()}');
+    debugPrint('   - deliveryStatus: ${_delivery?.status}');
+    debugPrint('   - driverVehicleType: ${_driverProfile?['vehicle_types']?['name']}');
+    
     return SizedBox(
       width: double.infinity,
       height: double.infinity,
@@ -468,6 +615,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
         // Real-time driver location tracking
         driverLatitude: _driverLocation?['latitude']?.toDouble(),
         driverLongitude: _driverLocation?['longitude']?.toDouble(),
+        // Polyline phase management
+        deliveryStatus: _delivery?.status,
+        onRouteCalculated: _onRouteCalculated,
+        // Driver vehicle type for map icons
+        driverVehicleType: _driverProfile?['vehicle_types']?['name'],
       ),
     );
   }
@@ -538,6 +690,19 @@ class _TrackingScreenState extends State<TrackingScreen> {
     );
   }
 
+  // Route calculation results
+  double? _routeDistanceKm;
+  double? _estimatedMinutes;
+
+  void _onRouteCalculated(double distanceKm, double estimatedMinutes) {
+    setState(() {
+      _routeDistanceKm = distanceKm;
+      _estimatedMinutes = estimatedMinutes;
+    });
+    
+    print('📊 Route calculated: ${distanceKm.toStringAsFixed(1)}km, ${estimatedMinutes.toStringAsFixed(0)} min');
+  }
+
   // Draggable bottom sheet (Uber/DoorDash style)
   Widget _buildDraggableBottomSheet() {
     return DraggableScrollableSheet(
@@ -604,6 +769,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
           const SizedBox(height: 24),
         ],
         
+        // Route phase indicator (polyline visualization)
+        _buildRoutePhaseIndicator(),
+        
+        const SizedBox(height: 24),
+        
         // Live location updates debug info
         _buildLocationDebugSection(),
         
@@ -642,29 +812,60 @@ class _TrackingScreenState extends State<TrackingScreen> {
         ),
         const SizedBox(height: 4),
         Text(
-          _getStatusText(),
+          _getRoutePhaseMessage(),
           style: const TextStyle(
             fontSize: 22,
             fontWeight: FontWeight.bold,
             color: Colors.black87,
           ),
         ),
-        if (_driverLocation != null) ...[
+        
+        // Enhanced ETA and route info
+        if (_driverLocation != null || _estimatedMinutes != null) ...[
           const SizedBox(height: 8),
           Row(
             children: [
-              Icon(Icons.access_time, size: 16, color: Colors.blue[600]),
+              Icon(
+                Icons.access_time, 
+                size: 16, 
+                color: _getETAColor(),
+              ),
               const SizedBox(width: 4),
-              Text(
-                _getEstimatedTime(),
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.blue[600],
-                  fontWeight: FontWeight.w500,
+              Expanded(
+                child: Text(
+                  _getEstimatedTime(),
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: _getETAColor(),
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ],
           ),
+          
+          // Route distance info (if available)
+          if (_routeDistanceKm != null && _routeDistanceKm! > 0) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Icon(
+                  Icons.route, 
+                  size: 16, 
+                  color: Colors.grey[600],
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Route distance: ${_routeDistanceKm!.toStringAsFixed(1)} km',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey[600],
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ] else if (_delivery?.status == 'driver_assigned' || _delivery?.status == 'pickup_arrived') ...[
           const SizedBox(height: 8),
           Row(
@@ -684,6 +885,26 @@ class _TrackingScreenState extends State<TrackingScreen> {
         ],
       ],
     );
+  }
+
+  // Get appropriate color for ETA display based on delivery phase
+  Color _getETAColor() {
+    if (_delivery == null) return Colors.grey;
+    
+    switch (_delivery!.status) {
+      case 'driver_assigned':
+      case 'going_to_pickup':
+        return Colors.blue[600]!; // Blue for pickup phase
+      case 'package_collected':
+      case 'going_to_destination':
+      case 'in_transit':
+        return Colors.purple[600]!; // Purple for delivery phase
+      case 'pickup_arrived':
+      case 'at_destination':
+        return Colors.green[600]!; // Green for arrival
+      default:
+        return Colors.grey[600]!;
+    }
   }
 
   Widget _buildDriverSection() {
@@ -709,11 +930,16 @@ class _TrackingScreenState extends State<TrackingScreen> {
           
           Row(
             children: [
-              // Driver avatar
+              // Driver avatar with profile picture
               CircleAvatar(
-                radius: 24,
+                radius: 28,
                 backgroundColor: Colors.blue[100],
-                child: const Icon(Icons.person, color: Colors.blue, size: 24),
+                backgroundImage: _driverProfile?['profile_picture_url'] != null 
+                    ? NetworkImage(_driverProfile!['profile_picture_url']) 
+                    : null,
+                child: _driverProfile?['profile_picture_url'] == null 
+                    ? const Icon(Icons.person, color: Colors.blue, size: 28)
+                    : null,
               ),
               const SizedBox(width: 16),
               
@@ -722,8 +948,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Driver name
                     Text(
-                      'Driver ${_delivery?.driverId?.substring(0, 8) ?? "Unknown"}',
+                      _driverProfile?['full_name'] ?? 'Loading driver info...',
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
@@ -731,14 +958,80 @@ class _TrackingScreenState extends State<TrackingScreen> {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    if (_driverStatus?['vehicle_type'] != null)
-                      Text(
-                        _driverStatus!['vehicle_type'],
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey,
-                        ),
+                    
+                    // Vehicle type and model
+                    if (_driverProfile?['vehicle_types'] != null || _driverProfile?['vehicle_model'] != null)
+                      Row(
+                        children: [
+                          Icon(Icons.directions_car, size: 16, color: Colors.grey[600]),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              '${_driverProfile?['vehicle_types']?['name'] ?? 'Vehicle'} ${_driverProfile?['vehicle_model'] ?? ''}',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey[600],
+                                fontWeight: FontWeight.w500,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
                       ),
+                    
+                    // Plate number
+                    if (_driverProfile?['plate_number'] != null) ...[
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Icon(Icons.confirmation_number, size: 16, color: Colors.grey[600]),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              _driverProfile!['plate_number'],
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey[600],
+                                fontWeight: FontWeight.w500,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    
+                    // Driver rating and deliveries
+                    if (_driverProfile?['rating'] != null) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(Icons.star, size: 16, color: Colors.amber[600]),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              '${_driverProfile!['rating'].toStringAsFixed(1)} • ${_driverProfile?['total_deliveries'] ?? 0} deliveries',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey[600],
+                                fontWeight: FontWeight.w500,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (_driverProfile?['is_verified'] == true) ...[
+                            const SizedBox(width: 8),
+                            Icon(
+                              Icons.verified,
+                              size: 16,
+                              color: Colors.blue[600],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
+                    
+                    // Last location update
                     if (_driverLocation != null) ...[
                       const SizedBox(height: 4),
                       Text(
@@ -795,6 +1088,214 @@ class _TrackingScreenState extends State<TrackingScreen> {
     );
   }
 
+  Widget _buildRoutePhaseIndicator() {
+    if (_delivery == null) return const SizedBox.shrink();
+    
+    // Determine current phase
+    final String currentPhase = _getCurrentRoutePhase();
+    if (currentPhase == 'none') return const SizedBox.shrink();
+    
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: _getPhaseBackgroundColor(),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _getPhaseBorderColor()),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: _getPhaseIconColor().withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  _getPhaseIcon(),
+                  color: _getPhaseIconColor(),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _getPhaseTitle(),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: _getPhaseIconColor(),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _getPhaseDescription(),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          
+          // Route visualization indicator
+          if (_routeDistanceKm != null || _estimatedMinutes != null) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.8),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  // Polyline color indicator
+                  Container(
+                    width: 4,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      color: _getPolylineColor(),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Route active on map',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                  ),
+                  if (_routeDistanceKm != null) ...[
+                    Text(
+                      '${_routeDistanceKm!.toStringAsFixed(1)}km',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: _getPhaseIconColor(),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _getCurrentRoutePhase() {
+    if (_delivery == null) return 'none';
+    
+    switch (_delivery!.status) {
+      case 'driver_assigned':
+      case 'going_to_pickup':
+        return 'driverToPickup';
+      case 'package_collected':
+      case 'going_to_destination':
+      case 'in_transit':
+        return 'pickupToDelivery';
+      default:
+        return 'none';
+    }
+  }
+
+  Color _getPhaseBackgroundColor() {
+    final phase = _getCurrentRoutePhase();
+    switch (phase) {
+      case 'driverToPickup':
+        return Colors.blue[50]!;
+      case 'pickupToDelivery':
+        return Colors.purple[50]!;
+      default:
+        return Colors.grey[50]!;
+    }
+  }
+
+  Color _getPhaseBorderColor() {
+    final phase = _getCurrentRoutePhase();
+    switch (phase) {
+      case 'driverToPickup':
+        return Colors.blue[200]!;
+      case 'pickupToDelivery':
+        return Colors.purple[200]!;
+      default:
+        return Colors.grey[200]!;
+    }
+  }
+
+  Color _getPhaseIconColor() {
+    final phase = _getCurrentRoutePhase();
+    switch (phase) {
+      case 'driverToPickup':
+        return Colors.blue[600]!;
+      case 'pickupToDelivery':
+        return Colors.purple[600]!;
+      default:
+        return Colors.grey[600]!;
+    }
+  }
+
+  IconData _getPhaseIcon() {
+    final phase = _getCurrentRoutePhase();
+    switch (phase) {
+      case 'driverToPickup':
+        return Icons.my_location;
+      case 'pickupToDelivery':
+        return Icons.local_shipping;
+      default:
+        return Icons.route;
+    }
+  }
+
+  String _getPhaseTitle() {
+    final phase = _getCurrentRoutePhase();
+    switch (phase) {
+      case 'driverToPickup':
+        return 'Phase 1: Heading to Pickup';
+      case 'pickupToDelivery':
+        return 'Phase 2: Delivery in Progress';
+      default:
+        return 'Route Planning';
+    }
+  }
+
+  String _getPhaseDescription() {
+    final phase = _getCurrentRoutePhase();
+    switch (phase) {
+      case 'driverToPickup':
+        return 'Driver is traveling to collect your package';
+      case 'pickupToDelivery':
+        return 'Package collected, driver heading to you';
+      default:
+        return 'Calculating optimal route';
+    }
+  }
+
+  Color _getPolylineColor() {
+    final phase = _getCurrentRoutePhase();
+    switch (phase) {
+      case 'driverToPickup':
+        return Colors.blue;
+      case 'pickupToDelivery':
+        return Colors.purple;
+      default:
+        return Colors.grey;
+    }
+  }
+
   Widget _buildLocationDebugSection() {
     if (_driverLocation == null) return const SizedBox.shrink();
     
@@ -826,6 +1327,8 @@ class _TrackingScreenState extends State<TrackingScreen> {
           Text(
             'Channel: driver-location-${widget.deliveryId}',
             style: const TextStyle(fontSize: 12, color: Colors.grey),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
           ),
           const SizedBox(height: 4),
           Text(
@@ -951,12 +1454,22 @@ class _TrackingScreenState extends State<TrackingScreen> {
     
     switch (_delivery!.status) {
       case 'driver_assigned':
+      case 'going_to_pickup':
+        if (_estimatedMinutes != null) {
+          return 'ETA to pickup: ${_estimatedMinutes!.round()} min';
+        }
         return 'Driver preparing - ETA 5-10 min';
       case 'pickup_arrived':
         return 'Driver at pickup location';
       case 'package_collected':
+      case 'going_to_destination':
       case 'in_transit':
+        if (_estimatedMinutes != null && _routeDistanceKm != null) {
+          return 'ETA: ${_estimatedMinutes!.round()} min (${_routeDistanceKm!.toStringAsFixed(1)}km)';
+        }
         return 'ETA ${_calculateDeliveryETA()}';
+      case 'at_destination':
+        return 'Driver has arrived at your location';
       case 'delivered':
         return 'Delivered successfully';
       default:
@@ -965,8 +1478,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   }
 
   String _calculateDeliveryETA() {
-    // Simple ETA calculation based on status
-    // In a real app, this would use distance and traffic data
+    // Fallback ETA calculation when route data isn't available
     if (_delivery?.status == 'package_collected') {
       return '15-25 min';
     } else if (_delivery?.status == 'in_transit') {
@@ -975,14 +1487,37 @@ class _TrackingScreenState extends State<TrackingScreen> {
     return '20-30 min';
   }
 
+  String _getRoutePhaseMessage() {
+    if (_delivery == null) return '';
+    
+    switch (_delivery!.status) {
+      case 'driver_assigned':
+      case 'going_to_pickup':
+        return '🚗 Driver is heading to pickup location';
+      case 'package_collected':
+      case 'going_to_destination':
+      case 'in_transit':
+        return '🚚 Driver has your package and is on the way';
+      case 'pickup_arrived':
+        return '📍 Driver has arrived at pickup location';
+      case 'at_destination':
+        return '🏁 Driver has arrived at your location';
+      default:
+        return _getStatusText();
+    }
+  }
+
   Widget _buildDeliveryProgress() {
     final currentStatus = _delivery?.status ?? 'pending';
     final steps = [
       {'status': 'pending', 'title': 'Order placed', 'icon': Icons.check_circle},
+      {'status': 'driver_offered', 'title': 'Driver found', 'icon': Icons.search},
       {'status': 'driver_assigned', 'title': 'Driver assigned', 'icon': Icons.person},
+      {'status': 'going_to_pickup', 'title': 'Heading to pickup', 'icon': Icons.directions},
       {'status': 'pickup_arrived', 'title': 'Driver at pickup', 'icon': Icons.my_location},
       {'status': 'package_collected', 'title': 'Package collected', 'icon': Icons.inventory},
-      {'status': 'in_transit', 'title': 'On the way', 'icon': Icons.local_shipping},
+      {'status': 'going_to_destination', 'title': 'On the way to you', 'icon': Icons.local_shipping},
+      {'status': 'at_destination', 'title': 'Driver arrived', 'icon': Icons.location_on},
       {'status': 'delivered', 'title': 'Delivered', 'icon': Icons.check_circle_outline},
     ];
 
@@ -1026,8 +1561,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
 
   bool _isStepCompleted(String stepStatus, String currentStatus) {
     final statusOrder = [
-      'pending', 'driver_offered', 'driver_assigned', 'pickup_arrived', 
-      'package_collected', 'in_transit', 'delivered'
+      'pending', 'driver_offered', 'driver_assigned', 'going_to_pickup', 
+      'pickup_arrived', 'package_collected', 'going_to_destination', 
+      'at_destination', 'in_transit', 'delivered'
     ];
     
     final stepIndex = statusOrder.indexOf(stepStatus);
@@ -1118,6 +1654,70 @@ class _TrackingScreenState extends State<TrackingScreen> {
           ),
         
         if (canCancel) const SizedBox(height: 12),
+        
+        // Debug: Test WebSocket Connection
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton(
+            onPressed: () async {
+              await _realtimeService.debugWebSocketConnection();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('WebSocket connection test completed - check debug logs')),
+                );
+              }
+            },
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.orange,
+              side: const BorderSide(color: Colors.orange),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: const Text(
+              'Test WebSocket Connection',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+        
+        const SizedBox(height: 8),
+        
+        // Debug: Test Manual Broadcast
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton(
+            onPressed: () async {
+              await _realtimeService.testBroadcastLocation(widget.deliveryId);
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Test broadcast sent - check debug logs for results')),
+                );
+              }
+            },
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.purple,
+              side: const BorderSide(color: Colors.purple),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: const Text(
+              'Test Manual Broadcast',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+        
+        const SizedBox(height: 12),
         
         // Help/Support button
         SizedBox(

@@ -7,6 +7,7 @@ import '../widgets/shared_delivery_map.dart';
 import '../widgets/address_input_field.dart';
 import '../services/hybrid_address_service.dart'; // UPDATED: Use hybrid service
 import '../constants/app_theme.dart';
+import '../utils/back_button_handler.dart';
 
 class LocationSelectionScreen extends StatefulWidget {
   final VehicleType selectedVehicleType;
@@ -78,9 +79,10 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      extendBody: true,
+    return SmartBackHandler(
+      child: Scaffold(
+        extendBodyBehindAppBar: true,
+        extendBody: true,
       body: Stack(
         children: [
           // MAP AS BACKGROUND (FULL SCREEN)
@@ -477,7 +479,7 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
           ),
         ],
       ),
-    );
+    ));
   }
 
   // Focus map on user's current location

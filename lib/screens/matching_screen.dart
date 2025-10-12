@@ -109,10 +109,20 @@ class _MatchingScreenState extends State<MatchingScreen>
       debugPrint('🚗 Driver search result: $result');
       
       if (result['ok'] == true) {
-        // Success - driver found and assigned
-        // The real-time listener will handle the UI update
-        debugPrint('✅ Driver search successful: ${result['assigned_driver_id']}');
+        // Success - driver has been OFFERED the delivery (not yet accepted)
+        debugPrint('✅ Driver offered delivery: ${result['offered_driver_id']}');
         debugPrint('📊 Found ${result['drivers_found']} drivers, closest at ${result['closest_driver_distance']}km');
+        
+        // Immediately update UI to show driver found, waiting for acceptance
+        setState(() {
+          _currentMessage = "Driver found! Waiting for acceptance...";
+          _isSearching = true; // Keep search animation but change message
+        });
+        
+        // Start 3-minute timeout for driver acceptance
+        _startDriverAcceptanceTimeout();
+        
+        // The real-time listener will handle the final acceptance/rejection
       } else {
         // No drivers found
         debugPrint('❌ No drivers found: ${result['message']}');

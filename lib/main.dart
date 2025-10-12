@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:provider/provider.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:swiftdash/router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -7,6 +8,7 @@ import 'package:swiftdash/config/env.dart';
 import 'package:swiftdash/constants/app_theme.dart';
 import 'package:swiftdash/screens/splash_screen.dart';
 import 'package:swiftdash/services/payment_service.dart';
+import 'package:swiftdash/providers/app_state_provider.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 Future<void> main() async {
@@ -58,7 +60,15 @@ Future<void> main() async {
   }
 
   // If initialization failed, MyApp will render an error screen with details.
-  runApp(MyApp(initErrorMessage: initError));
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AppStateProvider()),
+        ChangeNotifierProvider(create: (_) => HomeStateProvider()),
+      ],
+      child: MyApp(initErrorMessage: initError),
+    ),
+  );
 }
 
 class MyApp extends StatefulWidget {
@@ -80,8 +90,13 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     // Add lifecycle observer to handle app state changes
     WidgetsBinding.instance.addObserver(this);
     
-    // Listen to auth state changes to refresh router
+    // Initialize app state provider
     if (widget.initErrorMessage == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        context.read<AppStateProvider>().initialize();
+      });
+
+      // Listen to auth state changes to refresh router
       Supabase.instance.client.auth.onAuthStateChange.listen((data) {
         if (mounted) {
           // Enable wakelock when user logs in to keep app active

@@ -1,9 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart' as geo;
+import 'package:flutter/services.dart';
 import 'dart:async';
+import 'dart:math' as math;
+
 import '../services/mapbox_service.dart';
 import '../constants/app_theme.dart';
+
+// Polyline phases for delivery tracking
+enum PolylinePhase {
+  none,           // No polyline needed (arrived, pending, etc.)
+  driverToPickup, // Phase 1: Driver heading to pickup location
+  pickupToDelivery, // Phase 2: Driver heading from pickup to delivery
+  routePreview,   // Route preview: Pickup to delivery for location selection
+}
 
 class SharedDeliveryMap extends StatefulWidget {
   final Function(String address, double lat, double lng, bool isPickup)? onLocationSelected;
@@ -19,6 +30,13 @@ class SharedDeliveryMap extends StatefulWidget {
   // Real-time driver tracking
   final double? driverLatitude;
   final double? driverLongitude;
+  
+  // Polyline phase management
+  final String? deliveryStatus;
+  final Function(double distanceKm, double estimatedMinutes)? onRouteCalculated;
+  
+  // Driver vehicle information for map display
+  final String? driverVehicleType;
 
   const SharedDeliveryMap({
     super.key,
@@ -31,6 +49,9 @@ class SharedDeliveryMap extends StatefulWidget {
     this.deliveryLongitude,
     this.driverLatitude,
     this.driverLongitude,
+    this.deliveryStatus,
+    this.onRouteCalculated,
+    this.driverVehicleType,
   });
 
   @override
@@ -47,6 +68,10 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
   Position? _pickupLocation;
   Position? _deliveryLocation;
   Position? _driverLocation;
+  
+  // Vehicle marker management
+  PointAnnotation? _driverMarker;
+  bool _vehicleIconsLoaded = false;
   
   // User location (using Geolocator Position for GPS)
   geo.Position? _userLocation;
@@ -86,14 +111,29 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
   @override
   void didUpdateWidget(SharedDeliveryMap oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Update map when coordinates change (Uber-style responsiveness)
-    if (widget.pickupLatitude != oldWidget.pickupLatitude ||
+    
+    // Check for meaningful coordinate changes (avoid micro-updates)
+    final coordinatesChanged = widget.pickupLatitude != oldWidget.pickupLatitude ||
         widget.pickupLongitude != oldWidget.pickupLongitude ||
         widget.deliveryLatitude != oldWidget.deliveryLatitude ||
         widget.deliveryLongitude != oldWidget.deliveryLongitude ||
         widget.driverLatitude != oldWidget.driverLatitude ||
-        widget.driverLongitude != oldWidget.driverLongitude) {
-      _updateLocationsFromWidget();
+        widget.driverLongitude != oldWidget.driverLongitude;
+        
+    final statusChanged = widget.deliveryStatus != oldWidget.deliveryStatus;
+    
+    if (coordinatesChanged || statusChanged) {
+      debugPrint('🔄 SharedDeliveryMap updating - coordinates: $coordinatesChanged, status: $statusChanged');
+      
+      if (coordinatesChanged) {
+        _updateLocationsFromWidget();
+      }
+      
+      // Update polyline only when delivery status changes
+      if (statusChanged) {
+        debugPrint('🔄 Status change: ${oldWidget.deliveryStatus} → ${widget.deliveryStatus}');
+        _updatePolylineForStatus();
+      }
     }
   }
 
@@ -171,6 +211,9 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
         doubleTouchToZoomOutEnabled: true,
       ));
       print('Enhanced map gestures enabled (3D ready)');
+      
+      // Load vehicle icons for map markers
+      await _loadVehicleIcons();
       
       // Update markers if locations are already set
       await _updateMapMarkers();
@@ -497,36 +540,517 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     await _updateEnhancedMapMarkers();
   }
 
+  // Legacy route drawing - now calls enhanced polyline management
   Future<void> _drawRoute() async {
-    if (_pickupLocation == null || _deliveryLocation == null || _polylineAnnotationManager == null) return;
+    await _updatePolylineForStatus();
+  }
+
+  // Enhanced polyline management based on delivery status
+  Future<void> _updatePolylineForStatus() async {
+    if (_polylineAnnotationManager == null) return;
     
     try {
-      // FIXED: Clear all existing polylines before drawing new route
+      // Always clear existing polylines first
       await _polylineAnnotationManager!.deleteAll();
-      print('Cleared existing polylines');
+      print('🗺️ Cleared existing polylines for status update');
       
-      // Get route from Mapbox Directions API
+      // Determine polyline phase based on delivery status
+      final polylinePhase = _getPolylinePhase();
+      print('🗺️ Polyline phase: $polylinePhase');
+      
+      switch (polylinePhase) {
+        case PolylinePhase.driverToPickup:
+          await _drawDriverToPickupRoute();
+          break;
+        case PolylinePhase.pickupToDelivery:
+          await _drawPickupToDeliveryRoute();
+          break;
+        case PolylinePhase.routePreview:
+          await _drawRoutePreview();
+          break;
+        case PolylinePhase.none:
+          print('🗺️ No polyline needed for current status');
+          break;
+      }
+    } catch (e) {
+      print('❌ Error updating polyline for status: $e');
+    }
+  }
+
+  // Determine which polyline phase to show
+  PolylinePhase _getPolylinePhase() {
+    print('🗺️ _getPolylinePhase called');
+    print('🗺️ widget.deliveryStatus: ${widget.deliveryStatus}');
+    print('🗺️ _pickupLocation: ${_pickupLocation != null ? '(${_pickupLocation!.lat}, ${_pickupLocation!.lng})' : 'null'}');
+    print('🗺️ _deliveryLocation: ${_deliveryLocation != null ? '(${_deliveryLocation!.lat}, ${_deliveryLocation!.lng})' : 'null'}');
+    print('🗺️ _driverLocation: ${_driverLocation != null ? '(${_driverLocation!.lat}, ${_driverLocation!.lng})' : 'null'}');
+    
+    // If no delivery status, check for route preview mode (location selection)
+    if (widget.deliveryStatus == null) {
+      // Show route preview if both pickup and delivery locations are available
+      if (_pickupLocation != null && _deliveryLocation != null) {
+        print('🗺️ Returning PolylinePhase.routePreview');
+        return PolylinePhase.routePreview;
+      }
+      print('🗺️ Returning PolylinePhase.none (no locations)');
+      return PolylinePhase.none;
+    }
+    
+    PolylinePhase phase;
+    switch (widget.deliveryStatus!) {
+      case 'driver_assigned':
+      case 'going_to_pickup':
+        phase = PolylinePhase.driverToPickup;
+        break;
+      case 'package_collected':
+      case 'going_to_destination':
+      case 'in_transit':
+        phase = PolylinePhase.pickupToDelivery;
+        break;
+      case 'pickup_arrived':
+      case 'at_destination':
+      case 'delivered':
+        phase = PolylinePhase.none; // No route needed when arrived
+        break;
+      default:
+        phase = PolylinePhase.none;
+        break;
+    }
+    
+    print('🗺️ Returning phase: $phase for status: ${widget.deliveryStatus}');
+    return phase;
+  }
+
+  // Draw route from driver to pickup location (Phase 1)
+  Future<void> _drawDriverToPickupRoute() async {
+    print('🗺️ _drawDriverToPickupRoute called');
+    print('🗺️ _driverLocation: ${_driverLocation != null ? '(${_driverLocation!.lat}, ${_driverLocation!.lng})' : 'null'}');
+    print('🗺️ _pickupLocation: ${_pickupLocation != null ? '(${_pickupLocation!.lat}, ${_pickupLocation!.lng})' : 'null'}');
+    
+    if (_driverLocation == null || _pickupLocation == null) {
+      print('❌ Missing driver or pickup location for Phase 1 route');
+      print('   - Driver location: ${_driverLocation == null ? 'MISSING' : 'available'}');
+      print('   - Pickup location: ${_pickupLocation == null ? 'MISSING' : 'available'}');
+      return;
+    }
+    
+    try {
+      print('🗺️ Drawing Phase 1 route: Driver → Pickup');
+      print('🗺️ Route coordinates: (${_driverLocation!.lat}, ${_driverLocation!.lng}) → (${_pickupLocation!.lat}, ${_pickupLocation!.lng})');
+      
+      // Get route from driver's current location to pickup
+      final route = await MapboxService.getRoute(
+        _driverLocation!.lat.toDouble(), _driverLocation!.lng.toDouble(),
+        _pickupLocation!.lat.toDouble(), _pickupLocation!.lng.toDouble()
+      );
+      
+      if (route != null) {
+        // Use DoorDash-style vibrant blue
+        await _createPolyline(route, const Color(0xFF007AFF), 'Driver → Pickup');
+        
+        // Calculate and report ETA
+        final distance = _calculateRouteDistance(route);
+        final estimatedMinutes = _estimateDeliveryTime(distance, isToPickup: true);
+        widget.onRouteCalculated?.call(distance, estimatedMinutes);
+      }
+    } catch (e) {
+      print('❌ Error drawing driver to pickup route: $e');
+    }
+  }
+
+  // Draw route from pickup to delivery location (Phase 2)
+  Future<void> _drawPickupToDeliveryRoute() async {
+    if (_pickupLocation == null || _deliveryLocation == null) {
+      print('🗺️ Missing pickup or delivery location for Phase 2 route');
+      return;
+    }
+    
+    try {
+      print('🗺️ Drawing Phase 2 route: Pickup → Delivery');
+      
+      // Get route from pickup location to delivery destination
       final route = await MapboxService.getRoute(
         _pickupLocation!.lat.toDouble(), _pickupLocation!.lng.toDouble(),
         _deliveryLocation!.lat.toDouble(), _deliveryLocation!.lng.toDouble()
       );
       
       if (route != null) {
-        // Convert route coordinates to Position objects
-        final routePositions = route.map((coord) => Position(coord['lng']!, coord['lat']!)).toList();
+        // Use DoorDash-style delivery purple
+        await _createPolyline(route, const Color(0xFF8B5CF6), 'Pickup → Delivery');
         
-        // Create blue polyline
-        final polylineAnnotation = PolylineAnnotationOptions(
-          geometry: LineString(coordinates: routePositions),
-          lineColor: AppTheme.primaryBlue.value,
-          lineWidth: 5.0,
-        );
-        await _polylineAnnotationManager!.create(polylineAnnotation);
-        print('Route polyline added');
+        // Calculate and report ETA
+        final distance = _calculateRouteDistance(route);
+        final estimatedMinutes = _estimateDeliveryTime(distance, isToPickup: false);
+        widget.onRouteCalculated?.call(distance, estimatedMinutes);
       }
     } catch (e) {
-      print('Route drawing error: $e');
+      print('❌ Error drawing pickup to delivery route: $e');
     }
+  }
+
+  // Draw route preview for location selection (Pickup → Delivery preview)
+  Future<void> _drawRoutePreview() async {
+    if (_pickupLocation == null || _deliveryLocation == null) {
+      print('🗺️ Missing pickup or delivery location for route preview');
+      return;
+    }
+    
+    try {
+      print('🗺️ Drawing route preview: Pickup → Delivery');
+      
+      // Get route from pickup location to delivery destination
+      final route = await MapboxService.getRoute(
+        _pickupLocation!.lat.toDouble(), _pickupLocation!.lng.toDouble(),
+        _deliveryLocation!.lat.toDouble(), _deliveryLocation!.lng.toDouble()
+      );
+      
+      if (route != null) {
+        // Use a distinctive color for route preview (green for preview)
+        await _createPolyline(route, Colors.green, 'Route Preview');
+        
+        // Calculate and report route info for location selection
+        final distance = _calculateRouteDistance(route);
+        final estimatedMinutes = _estimateDeliveryTime(distance, isToPickup: false);
+        widget.onRouteCalculated?.call(distance, estimatedMinutes);
+        
+        print('✅ Route preview created: ${distance.toStringAsFixed(1)}km, ${estimatedMinutes.toStringAsFixed(0)} min');
+      }
+    } catch (e) {
+      print('❌ Error drawing route preview: $e');
+    }
+  }
+
+  // Create polyline with specified color and label
+  Future<void> _createPolyline(List<Map<String, double>> route, Color color, String label) async {
+    try {
+      // Convert route coordinates to Position objects
+      final routePositions = route.map((coord) => Position(coord['lng']!, coord['lat']!)).toList();
+      
+      debugPrint('🗺️ Creating polyline with ${routePositions.length} points');
+      debugPrint('🗺️ First point: ${routePositions.first.lng}, ${routePositions.first.lat}');
+      debugPrint('🗺️ Last point: ${routePositions.last.lng}, ${routePositions.last.lat}');
+      
+      // Create enhanced polyline with DoorDash/Instacart style
+      final polylineAnnotation = PolylineAnnotationOptions(
+        geometry: LineString(coordinates: routePositions),
+        lineColor: color.value,
+        lineWidth: 6.0, // Thicker line for better visibility
+        lineOpacity: 0.9, // More opaque for better contrast
+      );
+      
+      await _polylineAnnotationManager!.create(polylineAnnotation);
+      debugPrint('✅ $label polyline created with ${routePositions.length} points');
+    } catch (e) {
+      debugPrint('❌ Error creating $label polyline: $e');
+    }
+  }
+
+  // Calculate total route distance in kilometers
+  double _calculateRouteDistance(List<Map<String, double>> route) {
+    if (route.length < 2) return 0.0;
+    
+    double totalDistance = 0.0;
+    for (int i = 0; i < route.length - 1; i++) {
+      final lat1 = route[i]['lat']!;
+      final lng1 = route[i]['lng']!;
+      final lat2 = route[i + 1]['lat']!;
+      final lng2 = route[i + 1]['lng']!;
+      
+      // Use Haversine formula for distance calculation
+      totalDistance += _calculateDistance(lat1, lng1, lat2, lng2);
+    }
+    
+    return totalDistance;
+  }
+
+  // Calculate distance between two points using Haversine formula
+  double _calculateDistance(double lat1, double lng1, double lat2, double lng2) {
+    const double earthRadius = 6371.0; // Earth's radius in kilometers
+    final double dLat = _degreesToRadians(lat2 - lat1);
+    final double dLng = _degreesToRadians(lng2 - lng1);
+    
+    final double a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(_degreesToRadians(lat1)) * math.cos(_degreesToRadians(lat2)) *
+        math.sin(dLng / 2) * math.sin(dLng / 2);
+    final double c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    
+    return earthRadius * c;
+  }
+
+  double _degreesToRadians(double degrees) {
+    return degrees * (math.pi / 180);
+  }
+
+  // Load vehicle icons (placeholder for future SVG implementation)
+  Future<void> _loadVehicleIcons() async {
+    if (_mapboxMap == null || _vehicleIconsLoaded) return;
+
+    try {
+      print('🚗 Preparing enhanced vehicle markers...');
+      
+      // For now, we'll use enhanced geometric markers that represent vehicle shapes
+      // This provides immediate professional appearance while we prepare full SVG integration
+      
+      _vehicleIconsLoaded = true;
+      print('✅ Vehicle marker system ready!');
+      
+    } catch (e) {
+      print('❌ Error preparing vehicle markers: $e');
+    }
+  }
+
+  // Get vehicle icon name for map marker
+
+
+  // Create vehicle-specific SVG marker
+  Future<void> _createEnhancedVehicleMarker() async {
+    debugPrint('🚗 _createEnhancedVehicleMarker called for delivery tracking');
+    debugPrint('🚗 _circleAnnotationManager: ${_circleAnnotationManager != null ? 'exists' : 'null'}');
+    debugPrint('🚗 _pointAnnotationManager: ${_pointAnnotationManager != null ? 'exists' : 'null'}');
+    debugPrint('🚗 _driverLocation: $_driverLocation');
+    
+    if (_pointAnnotationManager == null || _driverLocation == null) {
+      debugPrint('❌ Cannot create vehicle marker - missing requirements:');
+      debugPrint('   - _pointAnnotationManager: ${_pointAnnotationManager == null ? 'MISSING' : 'available'}');
+      debugPrint('   - _driverLocation: ${_driverLocation == null ? 'MISSING' : 'available'}');
+      return;
+    }
+
+    try {
+      final vehicleType = widget.driverVehicleType ?? 'sedan';
+      debugPrint('🚗 Creating SVG vehicle marker for: $vehicleType');
+      debugPrint('🚗 Driver position: lat=${_driverLocation!.lat}, lng=${_driverLocation!.lng}');
+      
+      // Get vehicle-specific SVG icon path
+      final iconPath = _getVehicleIconPath(vehicleType);
+      debugPrint('🚗 Vehicle icon path: $iconPath');
+      
+      // For now, use enhanced circle marker (SVG loading will be added later)
+      await _createFallbackVehicleMarker();
+
+      // Create subtle background circle for better visibility
+      if (_circleAnnotationManager != null) {
+        final backgroundCircle = await _circleAnnotationManager!.create(
+          CircleAnnotationOptions(
+            geometry: Point(coordinates: _driverLocation!),
+            circleRadius: 20.0,
+            circleColor: Colors.white.withOpacity(0.9).value,
+            circleStrokeColor: Colors.blue.value,
+            circleStrokeWidth: 2.0,
+          ),
+        );
+        _driverMarkerCircles.add(backgroundCircle);
+      }
+      
+      debugPrint('✅ Enhanced $vehicleType SVG marker created successfully!');
+    } catch (e) {
+      debugPrint('❌ Error creating vehicle SVG marker: $e');
+      // Fallback to basic circle marker if SVG fails
+      await _createFallbackVehicleMarker();
+    }
+  }
+
+  // Get vehicle-specific icon path
+  String _getVehicleIconPath(String vehicleType) {
+    final type = vehicleType.toLowerCase();
+    
+    if (type.contains('motorcycle') || type.contains('bike')) {
+      return 'assets/icons/motorcycle.svg';
+    } else if (type.contains('truck')) {
+      return 'assets/icons/truck.svg';
+    } else if (type.contains('van')) {
+      return 'assets/icons/van.svg';
+    } else {
+      return 'assets/icons/sedan.svg'; // Default fallback
+    }
+  }
+
+  // Create DoorDash/Instacart style driver marker
+  Future<void> _createFallbackVehicleMarker() async {
+    if (_circleAnnotationManager == null || _driverLocation == null) return;
+    
+    try {
+      final vehicleColor = _getVehicleColor(widget.driverVehicleType ?? 'sedan');
+      
+      // Create outer glow effect (like DoorDash)
+      final outerGlow = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: _driverLocation!),
+          circleRadius: 20.0,
+          circleColor: vehicleColor.withOpacity(0.2).value,
+          circleStrokeColor: vehicleColor.withOpacity(0.4).value,
+          circleStrokeWidth: 1.0,
+        ),
+      );
+      
+      // Create main marker with shadow effect
+      final shadowMarker = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: Position(_driverLocation!.lng + 0.00002, _driverLocation!.lat - 0.00002)),
+          circleRadius: 12.0,
+          circleColor: Colors.black.withOpacity(0.2).value,
+        ),
+      );
+      
+      // Create main vehicle marker
+      final mainMarker = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: _driverLocation!),
+          circleRadius: 12.0,
+          circleColor: vehicleColor.value,
+          circleStrokeColor: Colors.white.value,
+          circleStrokeWidth: 3.0,
+        ),
+      );
+      
+      // Add vehicle type indicator (small inner circle)
+      final innerIndicator = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: _driverLocation!),
+          circleRadius: 6.0,
+          circleColor: Colors.white.value,
+        ),
+      );
+      
+      _driverMarkerCircles.addAll([outerGlow, shadowMarker, mainMarker, innerIndicator]);
+      
+      // Start subtle pulsing animation like DoorDash
+      _startDriverPulsingEffect();
+      
+      debugPrint('✅ DoorDash-style ${widget.driverVehicleType} marker created');
+    } catch (e) {
+      debugPrint('❌ Error creating enhanced marker: $e');
+    }
+  }
+
+  // Get vehicle type color
+  Color _getVehicleColor(String vehicleType) {
+    final type = vehicleType.toLowerCase();
+    
+    if (type.contains('motorcycle') || type.contains('bike')) {
+      return Colors.orange; // Orange for motorcycles
+    } else if (type.contains('truck')) {
+      return Colors.red; // Red for trucks
+    } else if (type.contains('van')) {
+      return Colors.purple; // Purple for vans
+    } else {
+      return Colors.blue; // Blue for sedans/default
+    }
+  }
+
+  // Create vehicle-specific identifier patterns (shapes representing vehicle types)
+  Future<void> _createVehicleIdentifierPattern(Map<String, Color> colors, String vehicleType) async {
+    final vehicleTypeLower = vehicleType.toLowerCase();
+    
+    if (vehicleTypeLower.contains('motorcycle')) {
+      // Single small dot for motorcycle (compact)
+      final dot = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: _driverLocation!),
+          circleRadius: 4.0,
+          circleColor: Colors.white.value,
+          circleStrokeColor: colors['primary']!.value,
+          circleStrokeWidth: 2.0,
+        ),
+      );
+      _driverMarkerCircles.add(dot);
+      
+    } else if (vehicleTypeLower.contains('truck') || vehicleTypeLower.contains('van')) {
+      // Rectangle pattern for trucks/vans (two horizontal dots)
+      final dot1 = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: Position(_driverLocation!.lng - 0.00008, _driverLocation!.lat)),
+          circleRadius: 3.0,
+          circleColor: Colors.white.value,
+          circleStrokeColor: colors['primary']!.value,
+          circleStrokeWidth: 1.5,
+        ),
+      );
+      final dot2 = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: Position(_driverLocation!.lng + 0.00008, _driverLocation!.lat)),
+          circleRadius: 3.0,
+          circleColor: Colors.white.value,
+          circleStrokeColor: colors['primary']!.value,
+          circleStrokeWidth: 1.5,
+        ),
+      );
+      _driverMarkerCircles.addAll([dot1, dot2]);
+      
+    } else if (vehicleTypeLower.contains('suv') || vehicleTypeLower.contains('pickup')) {
+      // Diamond pattern for SUVs/pickups (four small dots)
+      final positions = [
+        Position(_driverLocation!.lng, _driverLocation!.lat + 0.00006), // Top
+        Position(_driverLocation!.lng + 0.00006, _driverLocation!.lat), // Right
+        Position(_driverLocation!.lng, _driverLocation!.lat - 0.00006), // Bottom
+        Position(_driverLocation!.lng - 0.00006, _driverLocation!.lat), // Left
+      ];
+      
+      for (final pos in positions) {
+        final dot = await _circleAnnotationManager!.create(
+          CircleAnnotationOptions(
+            geometry: Point(coordinates: pos),
+            circleRadius: 2.5,
+            circleColor: Colors.white.value,
+            circleStrokeColor: colors['primary']!.value,
+            circleStrokeWidth: 1.0,
+          ),
+        );
+        _driverMarkerCircles.add(dot);
+      }
+      
+    } else {
+      // Default sedan pattern (center circle)
+      final centerDot = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: _driverLocation!),
+          circleRadius: 5.0,
+          circleColor: Colors.white.value,
+          circleStrokeColor: colors['primary']!.value,
+          circleStrokeWidth: 2.0,
+        ),
+      );
+      _driverMarkerCircles.add(centerDot);
+    }
+  }
+
+  // Get vehicle-specific design colors
+  Map<String, Color> _getVehicleDesignColors(String vehicleType) {
+    final vehicleTypeLower = vehicleType.toLowerCase();
+    
+    if (vehicleTypeLower.contains('motorcycle')) {
+      return {'primary': Colors.orange.shade600};
+    } else if (vehicleTypeLower.contains('truck')) {
+      return {'primary': Colors.green.shade600};
+    } else if (vehicleTypeLower.contains('van')) {
+      return {'primary': Colors.purple.shade600};
+    } else if (vehicleTypeLower.contains('suv')) {
+      return {'primary': Colors.teal.shade600};
+    } else if (vehicleTypeLower.contains('pickup')) {
+      return {'primary': Colors.indigo.shade600};
+    } else {
+      return {'primary': Colors.blue.shade600}; // Default sedan
+    }
+  }
+
+  // Get vehicle-specific marker styling with patterns
+
+
+  // Estimate delivery time based on distance and phase
+  double _estimateDeliveryTime(double distanceKm, {required bool isToPickup}) {
+    // Base speed assumptions (km/h)
+    const double citySpeed = 25.0; // Average city driving speed
+    const double pickupTime = 3.0; // Additional time for pickup process (minutes)
+    const double deliveryTime = 2.0; // Additional time for delivery process (minutes)
+    
+    // Calculate travel time
+    final double travelTimeHours = distanceKm / citySpeed;
+    final double travelTimeMinutes = travelTimeHours * 60;
+    
+    // Add process time based on phase
+    final double processTime = isToPickup ? pickupTime : deliveryTime;
+    
+    return travelTimeMinutes + processTime;
   }
 
   Future<void> _fitMapToBothLocations() async {
@@ -864,9 +1388,11 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     _pulseController.dispose();
     _locationSubscription?.cancel();
     _pulseTimer?.cancel();
+    _driverPulseTimer?.cancel();
     
     // Clean up pulse rings
     _cleanupPulseRings();
+    _cleanupDriverPulseRings();
     
     super.dispose();
   }
@@ -884,6 +1410,22 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       _pulseRings.clear();
     } catch (e) {
       print('Error cleaning up pulse rings: $e');
+    }
+  }
+
+  // Clean up all driver pulse rings
+  Future<void> _cleanupDriverPulseRings() async {
+    try {
+      for (final ring in _driverPulseRings) {
+        try {
+          await _circleAnnotationManager?.delete(ring);
+        } catch (e) {
+          // Ring might already be deleted
+        }
+      }
+      _driverPulseRings.clear();
+    } catch (e) {
+      print('Error cleaning up driver pulse rings: $e');
     }
   }
 
@@ -1022,6 +1564,8 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
 
   // Variables to track pulse rings
   List<CircleAnnotation> _pulseRings = [];
+  List<CircleAnnotation> _driverPulseRings = [];
+  Timer? _driverPulseTimer;
 
   // Create smooth overlapping pulse rings with animation-driven scaling
   Future<void> _createPulseRing() async {
@@ -1116,6 +1660,110 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     }
   }
 
+  // Start pulsing effect for driver marker
+  void _startDriverPulsingEffect() {
+    _driverPulseTimer?.cancel();
+    // Create pulsing rings for driver every 800ms
+    _driverPulseTimer = Timer.periodic(const Duration(milliseconds: 800), (timer) {
+      if (_driverLocation != null && _circleAnnotationManager != null) {
+        _createDriverPulseRing();
+      }
+    });
+  }
+
+  // Create pulsing ring for driver marker
+  Future<void> _createDriverPulseRing() async {
+    if (_driverLocation == null) return;
+
+    try {
+      // Clean up old driver pulse rings (keep max 2 for performance)
+      while (_driverPulseRings.length >= 6) { // 3 rings per set, max 2 sets
+        final oldRing = _driverPulseRings.removeAt(0);
+        try {
+          await _circleAnnotationManager!.delete(oldRing);
+        } catch (e) {
+          // Ring might already be deleted
+        }
+      }
+
+      final positions = Position(_driverLocation!.lng, _driverLocation!.lat);
+      
+      // Get current animation value for smooth scaling
+      final animValue = _pulseController.value;
+      final pulsePhase = Curves.easeInOut.transform(animValue);
+      
+      // Create pulsing rings with blue color for driver
+      final baseOpacity = 0.5 - (pulsePhase * 0.4);
+      final sizeMultiplier = 1.0 + (pulsePhase * 0.6);  // Slightly larger growth for driver
+      
+      // Outer ring (blue for driver)
+      final outerRing = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: positions),
+          circleRadius: 20.0 * sizeMultiplier,
+          circleColor: Colors.blue.shade400.withOpacity(baseOpacity * 0.3).value,
+          circleStrokeColor: Colors.blue.shade600.withOpacity(baseOpacity * 0.5).value,
+          circleStrokeWidth: 1.0,
+        ),
+      );
+      
+      // Middle ring
+      final middleRing = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: positions),
+          circleRadius: 16.0 * sizeMultiplier,
+          circleColor: Colors.blue.shade500.withOpacity(baseOpacity * 0.5).value,
+          circleStrokeColor: Colors.blue.shade700.withOpacity(baseOpacity * 0.7).value,
+          circleStrokeWidth: 1.5,
+        ),
+      );
+      
+      // Inner ring
+      final innerRing = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: positions),
+          circleRadius: 12.0 * sizeMultiplier,
+          circleColor: Colors.blue.shade600.withOpacity(baseOpacity * 0.7).value,
+          circleStrokeColor: Colors.blue.shade800.withOpacity(baseOpacity).value,
+          circleStrokeWidth: 2.0,
+        ),
+      );
+
+      _driverPulseRings.addAll([outerRing, middleRing, innerRing]);
+
+      // Schedule cleanup with staggered timing
+      Future.delayed(const Duration(milliseconds: 2000), () async {
+        try {
+          await _circleAnnotationManager?.delete(outerRing);
+          _driverPulseRings.remove(outerRing);
+        } catch (e) {
+          // Ring might already be deleted
+        }
+      });
+      
+      Future.delayed(const Duration(milliseconds: 2200), () async {
+        try {
+          await _circleAnnotationManager?.delete(middleRing);
+          _driverPulseRings.remove(middleRing);
+        } catch (e) {
+          // Ring might already be deleted
+        }
+      });
+      
+      Future.delayed(const Duration(milliseconds: 2400), () async {
+        try {
+          await _circleAnnotationManager?.delete(innerRing);
+          _driverPulseRings.remove(innerRing);
+        } catch (e) {
+          // Ring might already be deleted
+        }
+      });
+
+    } catch (e) {
+      print('Error creating driver pulse ring: $e');
+    }
+  }
+
   // Enhanced marker update method
   Future<void> _updateEnhancedMapMarkers() async {
     if (_pointAnnotationManager == null) return;
@@ -1127,8 +1775,13 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       // Update drop-off marker  
       await _updateDropoffMarker();
       
-      // Update driver marker (real-time tracking)
-      await _updateDriverMarker();
+      // Update driver marker (real-time tracking) - only when tracking delivery
+      if (widget.deliveryStatus != null && (widget.driverLatitude != null || widget.driverLongitude != null)) {
+        debugPrint('🚗 Delivery tracking mode detected, updating driver marker');
+        await _updateDriverMarker();
+      } else {
+        debugPrint('🚗 Location selection mode - skipping driver marker update');
+      }
       
       // Update route between markers
       if (_pickupLocation != null && _deliveryLocation != null) {
@@ -1167,41 +1820,50 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     if (_circleAnnotationManager == null || _pickupLocation == null) return;
 
     try {
-      // Create outer ring for visibility (larger and more prominent)
-      final outerRing = await _circleAnnotationManager!.create(
+      // DoorDash/Instacart style pickup marker
+      
+      // Subtle outer glow
+      final outerGlow = await _circleAnnotationManager!.create(
         CircleAnnotationOptions(
           geometry: Point(coordinates: _pickupLocation!),
-          circleRadius: 20.0,
-          circleColor: Colors.green.withOpacity(0.2).value,
-          circleStrokeColor: Colors.green.value,
-          circleStrokeWidth: 3.0,
-        ),
-      );
-
-      // Create inner solid circle (brighter and larger)
-      final innerCircle = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _pickupLocation!),
-          circleRadius: 10.0,
-          circleColor: Colors.green.shade600.value,
-          circleStrokeColor: Colors.white.value,
-          circleStrokeWidth: 4.0,
-        ),
-      );
-
-      // Create center dot for precise location (larger for visibility)
-      final centerDot = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _pickupLocation!),
-          circleRadius: 4.0,
-          circleColor: Colors.white.value,
-          circleStrokeColor: Colors.green.shade800.value,
+          circleRadius: 24.0,
+          circleColor: const Color(0xFF10B981).withOpacity(0.15).value,
+          circleStrokeColor: const Color(0xFF10B981).withOpacity(0.3).value,
           circleStrokeWidth: 1.0,
         ),
       );
 
+      // Shadow effect
+      final shadow = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: Position(_pickupLocation!.lng + 0.00002, _pickupLocation!.lat - 0.00002)),
+          circleRadius: 14.0,
+          circleColor: Colors.black.withOpacity(0.2).value,
+        ),
+      );
+
+      // Main pickup circle with professional green
+      final mainMarker = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: _pickupLocation!),
+          circleRadius: 14.0,
+          circleColor: const Color(0xFF10B981).value, // Emerald green
+          circleStrokeColor: Colors.white.value,
+          circleStrokeWidth: 3.0,
+        ),
+      );
+
+      // Inner white indicator
+      final innerIndicator = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: _pickupLocation!),
+          circleRadius: 6.0,
+          circleColor: Colors.white.value,
+        ),
+      );
+
       // Track all circles for cleanup
-      _pickupMarkerCircles.addAll([outerRing, innerCircle, centerDot]);
+      _pickupMarkerCircles.addAll([outerGlow, shadow, mainMarker, innerIndicator]);
     } catch (e) {
       print('Error creating pickup circle marker: $e');
     }
@@ -1235,52 +1897,84 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     if (_circleAnnotationManager == null || _deliveryLocation == null) return;
 
     try {
-      // Create outer ring for visibility (larger and more prominent)
-      final outerRing = await _circleAnnotationManager!.create(
+      // DoorDash/Instacart style delivery marker
+      
+      // Subtle outer glow
+      final outerGlow = await _circleAnnotationManager!.create(
         CircleAnnotationOptions(
           geometry: Point(coordinates: _deliveryLocation!),
-          circleRadius: 20.0,
-          circleColor: Colors.red.withOpacity(0.2).value,
-          circleStrokeColor: Colors.red.value,
-          circleStrokeWidth: 3.0,
-        ),
-      );
-
-      // Create inner solid circle (brighter and larger)
-      final innerCircle = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _deliveryLocation!),
-          circleRadius: 10.0,
-          circleColor: Colors.red.shade600.value,
-          circleStrokeColor: Colors.white.value,
-          circleStrokeWidth: 4.0,
-        ),
-      );
-
-      // Create center dot for precise location (larger for visibility)
-      final centerDot = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _deliveryLocation!),
-          circleRadius: 4.0,
-          circleColor: Colors.white.value,
-          circleStrokeColor: Colors.red.shade800.value,
+          circleRadius: 24.0,
+          circleColor: const Color(0xFFEF4444).withOpacity(0.15).value,
+          circleStrokeColor: const Color(0xFFEF4444).withOpacity(0.3).value,
           circleStrokeWidth: 1.0,
         ),
       );
 
+      // Shadow effect
+      final shadow = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: Position(_deliveryLocation!.lng + 0.00002, _deliveryLocation!.lat - 0.00002)),
+          circleRadius: 14.0,
+          circleColor: Colors.black.withOpacity(0.2).value,
+        ),
+      );
+
+      // Main delivery circle with professional red
+      final mainMarker = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: _deliveryLocation!),
+          circleRadius: 14.0,
+          circleColor: const Color(0xFFEF4444).value, // Professional red
+          circleStrokeColor: Colors.white.value,
+          circleStrokeWidth: 3.0,
+        ),
+      );
+
+      // Inner white indicator
+      final innerIndicator = await _circleAnnotationManager!.create(
+        CircleAnnotationOptions(
+          geometry: Point(coordinates: _deliveryLocation!),
+          circleRadius: 6.0,
+          circleColor: Colors.white.value,
+        ),
+      );
+
       // Track all circles for cleanup
-      _dropoffMarkerCircles.addAll([outerRing, innerCircle, centerDot]);
+      _dropoffMarkerCircles.addAll([outerGlow, shadow, mainMarker, innerIndicator]);
     } catch (e) {
       print('Error creating dropoff circle marker: $e');
     }
   }
 
-  // Update driver marker (real-time tracking)
+  // Update driver marker (real-time tracking with pulsing effect)
+  // Update driver marker with SVG vehicle icon (real-time tracking)
   Future<void> _updateDriverMarker() async {
-    if (_driverLocation == null) return;
+    debugPrint('🚗 _updateDriverMarker called for delivery tracking');
+    debugPrint('🚗 _driverLocation: $_driverLocation');
+    debugPrint('🚗 _pointAnnotationManager: ${_pointAnnotationManager != null ? 'exists' : 'null'}');
+    debugPrint('🚗 _circleAnnotationManager: ${_circleAnnotationManager != null ? 'exists' : 'null'}');
+    debugPrint('🚗 widget.driverLatitude: ${widget.driverLatitude}');
+    debugPrint('🚗 widget.driverLongitude: ${widget.driverLongitude}');
+    debugPrint('🚗 deliveryStatus: ${widget.deliveryStatus}');
+    
+    if (_driverLocation == null || _pointAnnotationManager == null) {
+      debugPrint('❌ Cannot create driver marker - missing requirements:');
+      debugPrint('   - _driverLocation: ${_driverLocation == null ? 'MISSING' : 'available'}');
+      debugPrint('   - _pointAnnotationManager: ${_pointAnnotationManager == null ? 'MISSING' : 'available'}');
+      return;
+    }
 
     try {
-      // Remove existing driver marker circles
+      print('🚗 Starting driver marker creation process...');
+      
+      // Remove existing driver marker
+      if (_driverMarker != null) {
+        await _pointAnnotationManager!.delete(_driverMarker!);
+        _driverMarker = null;
+        print('🚗 Existing driver marker removed');
+      }
+
+      // Remove existing pulsing circles
       for (final circle in _driverMarkerCircles) {
         try {
           await _circleAnnotationManager!.delete(circle);
@@ -1289,59 +1983,26 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
         }
       }
       _driverMarkerCircles.clear();
+      print('🚗 Existing driver circles cleared');
 
-      // Create driver marker
-      await _createDriverCircleMarker();
-      print('Driver marker updated at: ${_driverLocation!.lat}, ${_driverLocation!.lng}');
+      // Create new SVG-based vehicle marker
+      print('🚗 Creating enhanced vehicle marker...');
+      await _createEnhancedVehicleMarker();
+      
+      // Start pulsing effect around the vehicle icon for visibility
+      print('🚗 Starting pulsing effect...');
+      _startDriverPulsingEffect();
+      
+      final vehicleType = widget.driverVehicleType ?? 'sedan';
+      print('✅ Driver marker creation complete: $vehicleType at ${_driverLocation!.lat}, ${_driverLocation!.lng}');
     } catch (e) {
-      print('Error updating driver marker: $e');
+      print('❌ Error updating driver vehicle marker: $e');
+      print('❌ Stack trace: ${StackTrace.current}');
     }
   }
 
-  // Create reliable driver marker using circles (different color for driver)
-  Future<void> _createDriverCircleMarker() async {
-    if (_circleAnnotationManager == null || _driverLocation == null) return;
+  // Get vehicle-type specific colors for map markers
 
-    try {
-      // Create outer ring for visibility (blue for driver)
-      final outerRing = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _driverLocation!),
-          circleRadius: 12.0,
-          circleColor: Colors.blue.shade600.withOpacity(0.3).value,
-          circleStrokeColor: Colors.blue.shade800.value,
-          circleStrokeWidth: 2.0,
-        ),
-      );
-
-      // Create inner circle for contrast
-      final innerCircle = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _driverLocation!),
-          circleRadius: 8.0,
-          circleColor: Colors.blue.shade500.value,
-          circleStrokeColor: Colors.white.value,
-          circleStrokeWidth: 2.0,
-        ),
-      );
-
-      // Create center dot for precise location
-      final centerDot = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _driverLocation!),
-          circleRadius: 4.0,
-          circleColor: Colors.white.value,
-          circleStrokeColor: Colors.blue.shade800.value,
-          circleStrokeWidth: 1.0,
-        ),
-      );
-
-      // Track all circles for cleanup
-      _driverMarkerCircles.addAll([outerRing, innerCircle, centerDot]);
-    } catch (e) {
-      print('Error creating driver circle marker: $e');
-    }
-  }
 
 
 }

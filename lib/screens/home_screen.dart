@@ -10,6 +10,7 @@ import '../widgets/modern_widgets.dart';
 import '../widgets/app_drawer.dart';
 import '../services/delivery_service.dart';
 import '../models/delivery.dart';
+import '../utils/back_button_handler.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -18,13 +19,15 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> 
+    with TickerProviderStateMixin {
   late AnimationController _fadeController;
   late AnimationController _slideController;
   
   final PageController _pageController = PageController();
   int _currentPromoIndex = 0;
   
+  // State variables for deliveries
   List<Delivery> _recentDeliveries = [];
   bool _isLoadingDeliveries = true;
   RealtimeChannel? _deliveriesChannel;
@@ -121,8 +124,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final userName = user?.userMetadata?['full_name'] ?? 
                     user?.email?.split('@')[0] ?? 'User';
 
-    return Scaffold(
-      key: _scaffoldKey,
+    return SmartBackHandler(
+      child: Scaffold(
+        key: _scaffoldKey,
       backgroundColor: AppTheme.backgroundColor,
       drawer: const AppDrawer(),
       body: SafeArea(
@@ -164,7 +168,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         icon: Icons.add_rounded,
         heroTag: "home_fab",
       ).animate().scale(delay: 800.milliseconds),
-    );
+    ));
   }
 
   Widget _buildHeader(String userName) {
@@ -481,7 +485,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ),
                   () {
                     HapticFeedback.lightImpact();
-                    context.go('/tracking');
+                    _handleTrackOrder();
                   },
                 ).animate().slideX(delay: 750.milliseconds, begin: 0.2),
               ),
@@ -1220,6 +1224,133 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ],
         );
       },
+    );
+  }
+
+  void _handleTrackOrder() async {
+    try {
+      // Get current user's active deliveries
+      final currentUser = Supabase.instance.client.auth.currentUser;
+      if (currentUser == null) {
+        _showMessage('Please sign in to track your orders');
+        return;
+      }
+
+      // Query for active deliveries (statuses that indicate ongoing delivery)
+      final activeDeliveries = await Supabase.instance.client
+          .from('deliveries')
+          .select('id, status, created_at')
+          .eq('customer_id', currentUser.id)
+          .inFilter('status', [
+            'pending',
+            'driver_offered', 
+            'driver_assigned',
+            'going_to_pickup',
+            'at_pickup',
+            'picked_up',
+            'going_to_destination',
+            'at_destination'
+          ])
+          .order('created_at', ascending: false)
+          .limit(1);
+
+      if (activeDeliveries.isEmpty) {
+        // No active deliveries, show message and maybe redirect to create delivery
+        _showNoActiveOrderDialog();
+      } else {
+        // Navigate to tracking screen with the most recent active delivery
+        final deliveryId = activeDeliveries.first['id'];
+        context.go('/tracking/$deliveryId');
+      }
+    } catch (e) {
+      debugPrint('❌ Error in _handleTrackOrder: $e');
+      _showMessage('Unable to track orders at the moment');
+    }
+  }
+
+  void _showNoActiveOrderDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppTheme.radius16),
+          ),
+          title: Row(
+            children: [
+              Icon(
+                Icons.info_outline_rounded,
+                color: AppTheme.primaryBlue,
+                size: 24,
+              ),
+              const SizedBox(width: AppTheme.spacing8),
+              Text(
+                'No Active Orders',
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            'You don\'t have any active deliveries to track right now.',
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              color: AppTheme.textSecondary,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                'OK',
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                context.go('/create-delivery');
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primaryBlue,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppTheme.radius8),
+                ),
+              ),
+              child: Text(
+                'Create Order',
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: AppTheme.primaryBlue,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(AppTheme.spacing16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTheme.radius8),
+        ),
+      ),
     );
   }
 }

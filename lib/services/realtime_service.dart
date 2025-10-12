@@ -37,41 +37,71 @@ class CustomerRealtimeService {
   Future<void> subscribeToDriverLocation(String deliveryId) async {
     final channelName = 'driver-location-$deliveryId';
     
+    if (kDebugMode) debugPrint('🔊 CustomerRealtimeService: Attempting to subscribe to $channelName');
+    
     if (_locationChannels.containsKey(channelName)) {
-      if (kDebugMode) debugPrint('CustomerRealtimeService: Already subscribed to $channelName');
+      if (kDebugMode) debugPrint('⚠️ CustomerRealtimeService: Already subscribed to $channelName');
       return;
     }
 
     final channel = _supabase.channel(channelName);
+    
+    // Listen to ALL broadcast events for debugging
+    channel.onBroadcast(
+      event: '*', // Listen to ALL events first
+      callback: (payload) {
+        if (kDebugMode) {
+          debugPrint('📻 CustomerRealtimeService: ANY BROADCAST RECEIVED on $channelName');
+          debugPrint('📻 Payload: $payload');
+        }
+      },
+    );
     
     // Listen to location_update broadcasts only (no DB operations)
     channel.onBroadcast(
       event: 'location_update',
       callback: (payload) {
         try {
+          if (kDebugMode) {
+            debugPrint('📡 CustomerRealtimeService: RAW BROADCAST RECEIVED');
+            debugPrint('📡 Channel: $channelName');
+            debugPrint('📡 Event: location_update');
+            debugPrint('📡 Payload: $payload');
+            debugPrint('📡 Payload type: ${payload.runtimeType}');
+          }
+          
           final locationData = Map<String, dynamic>.from(payload);
           locationData['deliveryId'] = deliveryId; // Add context
+          
+          if (kDebugMode) {
+            debugPrint('📡 Processed location data: $locationData');
+          }
+          
           _locationController.add(locationData);
           
           if (kDebugMode) {
-            debugPrint('CustomerRealtimeService: Location update for delivery $deliveryId');
+            debugPrint('✅ CustomerRealtimeService: Location update processed for delivery $deliveryId');
           }
         } catch (e, stackTrace) {
           if (kDebugMode) {
-            debugPrint('CustomerRealtimeService: Error processing location broadcast: $e');
-            debugPrint('Stack trace: $stackTrace');
+            debugPrint('❌ CustomerRealtimeService: Error processing location broadcast: $e');
+            debugPrint('❌ Stack trace: $stackTrace');
+            debugPrint('❌ Raw payload: $payload');
           }
         }
       },
     );
 
-    // Subscribe to the channel
+    // Log subscription status
+    if (kDebugMode) debugPrint('🔌 CustomerRealtimeService: Subscribing to channel...');
     await channel.subscribe();
-    _locationChannels[channelName] = channel;
     
     if (kDebugMode) {
-      debugPrint('CustomerRealtimeService: Subscribed to driver location broadcasts for delivery $deliveryId');
+      debugPrint('✅ CustomerRealtimeService: Successfully subscribed to $channelName');
+      debugPrint('🎯 CustomerRealtimeService: Now listening for "location_update" events');
     }
+    
+    _locationChannels[channelName] = channel;
   }
 
   /// Subscribe to delivery status updates from lightweight status table
@@ -221,6 +251,69 @@ class CustomerRealtimeService {
           debugPrint('CustomerRealtimeService: Error unsubscribing from driver channel: $e');
         }
       }
+    }
+  }
+
+  /// Test method: Manually broadcast location data for debugging
+  Future<void> testBroadcastLocation(String deliveryId) async {
+    final channelName = 'driver-location-$deliveryId';
+    final channel = _supabase.channel(channelName);
+    
+    if (kDebugMode) debugPrint('🧪 TEST: Creating test broadcast channel: $channelName');
+    
+    await channel.subscribe();
+    
+    // Wait a moment for subscription to be established
+    await Future.delayed(const Duration(seconds: 2));
+    
+    if (kDebugMode) debugPrint('🧪 TEST: Broadcasting test location data...');
+    
+    final testPayload = {
+      'driver_id': 'test-driver-123',
+      'delivery_id': deliveryId,
+      'latitude': 14.5995, // Manila coordinates
+      'longitude': 120.9842,
+      'speed_kmh': 25.0,
+      'heading': 180,
+      'battery_level': 87,
+      'timestamp': DateTime.now().toIso8601String(),
+    };
+    
+    try {
+      await channel.sendBroadcastMessage(event: 'location_update', payload: testPayload);
+      if (kDebugMode) debugPrint('🧪 TEST: Test broadcast sent with payload: $testPayload');
+    } catch (e) {
+      if (kDebugMode) debugPrint('❌ TEST: Failed to send test broadcast: $e');
+    }
+    
+    // Clean up test channel after a delay
+    Future.delayed(const Duration(seconds: 5), () async {
+      try {
+        await _supabase.removeChannel(channel);
+        if (kDebugMode) debugPrint('🧪 TEST: Test channel cleaned up');
+      } catch (e) {
+        if (kDebugMode) debugPrint('⚠️ TEST: Error cleaning up test channel: $e');
+      }
+    });
+  }
+
+  /// Debug method: Check WebSocket connection status
+  Future<void> debugWebSocketConnection() async {
+    if (kDebugMode) {
+      debugPrint('🔍 DEBUG: Checking Supabase WebSocket connection...');
+      debugPrint('🔍 DEBUG: Client initialized and ready for WebSocket operations');
+    }
+    
+    // Check if we can create a test channel
+    final testChannel = _supabase.channel('connection-test-${DateTime.now().millisecondsSinceEpoch}');
+    
+    try {
+      await testChannel.subscribe();
+      if (kDebugMode) debugPrint('✅ WebSocket connection working - test channel subscribed');
+      await _supabase.removeChannel(testChannel);
+      if (kDebugMode) debugPrint('✅ Test channel removed successfully');
+    } catch (e) {
+      if (kDebugMode) debugPrint('❌ WebSocket connection failed: $e');
     }
   }
 
