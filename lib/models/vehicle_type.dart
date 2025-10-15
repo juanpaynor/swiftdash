@@ -7,6 +7,7 @@ class VehicleType {
   final double maxWeightKg;
   final double basePrice;
   final double pricePerKm;
+  final double? additionalStopCharge; // Charge for each additional stop in multi-stop delivery
   final String? iconUrl;
   final bool isActive;
 
@@ -17,6 +18,7 @@ class VehicleType {
     required this.maxWeightKg,
     required this.basePrice,
     required this.pricePerKm,
+    this.additionalStopCharge,
     this.iconUrl,
     required this.isActive,
   });
@@ -29,6 +31,9 @@ class VehicleType {
       maxWeightKg: (json['max_weight_kg'] as num).toDouble(),
       basePrice: (json['base_price'] as num).toDouble(),
       pricePerKm: (json['price_per_km'] as num).toDouble(),
+      additionalStopCharge: json['additional_stop_charge'] != null
+          ? (json['additional_stop_charge'] as num).toDouble()
+          : null,
       iconUrl: json['icon_url'] as String?,
       isActive: json['is_active'] as bool,
     );
@@ -42,6 +47,7 @@ class VehicleType {
       'max_weight_kg': maxWeightKg,
       'base_price': basePrice,
       'price_per_km': pricePerKm,
+      'additional_stop_charge': additionalStopCharge,
       'icon_url': iconUrl,
       'is_active': isActive,
     };

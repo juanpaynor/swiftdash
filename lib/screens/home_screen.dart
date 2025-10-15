@@ -473,7 +473,7 @@ class _HomeScreenState extends State<HomeScreen>
                     HapticFeedback.mediumImpact();
                     context.go('/create-delivery');
                   },
-                ).animate().slideX(delay: 700.milliseconds, begin: -0.2),
+                ).animate().slideX(delay: 700.milliseconds, begin: 0.1),
               ),
               const SizedBox(width: AppTheme.spacing12),
               Expanded(
@@ -487,7 +487,7 @@ class _HomeScreenState extends State<HomeScreen>
                     HapticFeedback.lightImpact();
                     _handleTrackOrder();
                   },
-                ).animate().slideX(delay: 750.milliseconds, begin: 0.2),
+                ).animate().slideX(delay: 700.milliseconds, begin: 0.1),
               ),
             ],
           ),
@@ -505,9 +505,29 @@ class _HomeScreenState extends State<HomeScreen>
                     HapticFeedback.lightImpact();
                     context.go('/addresses');
                   },
-                ).animate().slideX(delay: 800.milliseconds, begin: -0.2),
+                ).animate().slideX(delay: 700.milliseconds, begin: 0.1),
               ),
               const SizedBox(width: AppTheme.spacing12),
+              Expanded(
+                child: _buildQuickActionCard(
+                  'Scheduled',
+                  Icons.schedule_rounded,
+                  const LinearGradient(
+                    colors: [Color(0xFFF79E1B), Color(0xFFFFC837)],
+                  ),
+                  () {
+                    HapticFeedback.lightImpact();
+                    context.go('/scheduled-deliveries');
+                  },
+                ).animate().slideX(delay: 700.milliseconds, begin: 0.1),
+              ),
+            ],
+          ),
+          
+          const SizedBox(height: AppTheme.spacing12),
+          
+          Row(
+            children: [
               Expanded(
                 child: _buildQuickActionCard(
                   'Order History',
@@ -521,8 +541,11 @@ class _HomeScreenState extends State<HomeScreen>
                       message: 'Order history coming soon!',
                     );
                   },
-                ).animate().slideX(delay: 850.milliseconds, begin: 0.2),
+                ).animate().slideX(delay: 700.milliseconds, begin: 0.1),
               ),
+              const SizedBox(width: AppTheme.spacing12),
+              // Empty space for symmetry
+              Expanded(child: Container()),
             ],
           ),
         ],

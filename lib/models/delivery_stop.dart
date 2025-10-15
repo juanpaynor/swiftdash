@@ -1,100 +1,246 @@
+/// Model for individual stops in a multi-stop delivery
 class DeliveryStop {
-  final String id;
-  final String type; // 'pickup' or 'delivery'
+  final String? id; // Nullable until saved to database
+  final String deliveryId;
+  final int stopNumber; // 1, 2, 3, etc. - order of stops
+  final String stopType; // 'pickup' or 'dropoff'
+  
+  // Address details
   final String address;
-  final double? latitude;
-  final double? longitude;
-  final String contactName;
-  final String contactPhone;
-  final String? instructions;
-  final String? packageDescription; // Only for pickup stops
-  final double? packageWeight; // Only for pickup stops
-  final double? packageValue; // Only for pickup stops
-  final bool isCompleted;
+  final double latitude;
+  final double longitude;
+  
+  // Optional detailed address components
+  final String? houseNumber;
+  final String? street;
+  final String? barangay;
+  final String? city;
+  final String? province;
+  
+  // Stop-specific details
+  final String? recipientName;
+  final String? recipientPhone;
+  final String? deliveryNotes;
+  
+  // Status tracking
+  final String status; // 'pending', 'arrived', 'completed', 'failed'
+  final DateTime? arrivedAt;
+  final DateTime? completedAt;
+  
+  // Proof of delivery
+  final String? proofPhotoUrl;
+  final String? signatureUrl;
+  final String? completionNotes;
+  
+  // Metadata
+  final DateTime createdAt;
+  final DateTime? updatedAt;
 
   DeliveryStop({
     required this.id,
-    required this.type,
+    required this.deliveryId,
+    required this.stopNumber,
+    required this.stopType,
     required this.address,
-    this.latitude,
-    this.longitude,
-    required this.contactName,
-    required this.contactPhone,
-    this.instructions,
-    this.packageDescription,
-    this.packageWeight,
-    this.packageValue,
-    this.isCompleted = false,
+    required this.latitude,
+    required this.longitude,
+    this.houseNumber,
+    this.street,
+    this.barangay,
+    this.city,
+    this.province,
+    this.recipientName,
+    this.recipientPhone,
+    this.deliveryNotes,
+    required this.status,
+    this.arrivedAt,
+    this.completedAt,
+    this.proofPhotoUrl,
+    this.signatureUrl,
+    this.completionNotes,
+    required this.createdAt,
+    this.updatedAt,
   });
 
+  // Copy with method for updates
   DeliveryStop copyWith({
     String? id,
-    String? type,
+    String? deliveryId,
+    int? stopNumber,
+    String? stopType,
     String? address,
     double? latitude,
     double? longitude,
-    String? contactName,
-    String? contactPhone,
-    String? instructions,
-    String? packageDescription,
-    double? packageWeight,
-    double? packageValue,
-    bool? isCompleted,
+    String? houseNumber,
+    String? street,
+    String? barangay,
+    String? city,
+    String? province,
+    String? recipientName,
+    String? recipientPhone,
+    String? deliveryNotes,
+    String? status,
+    DateTime? arrivedAt,
+    DateTime? completedAt,
+    String? proofPhotoUrl,
+    String? signatureUrl,
+    String? completionNotes,
+    DateTime? createdAt,
+    DateTime? updatedAt,
   }) {
     return DeliveryStop(
       id: id ?? this.id,
-      type: type ?? this.type,
+      deliveryId: deliveryId ?? this.deliveryId,
+      stopNumber: stopNumber ?? this.stopNumber,
+      stopType: stopType ?? this.stopType,
       address: address ?? this.address,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
-      contactName: contactName ?? this.contactName,
-      contactPhone: contactPhone ?? this.contactPhone,
-      instructions: instructions ?? this.instructions,
-      packageDescription: packageDescription ?? this.packageDescription,
-      packageWeight: packageWeight ?? this.packageWeight,
-      packageValue: packageValue ?? this.packageValue,
-      isCompleted: isCompleted ?? this.isCompleted,
+      houseNumber: houseNumber ?? this.houseNumber,
+      street: street ?? this.street,
+      barangay: barangay ?? this.barangay,
+      city: city ?? this.city,
+      province: province ?? this.province,
+      recipientName: recipientName ?? this.recipientName,
+      recipientPhone: recipientPhone ?? this.recipientPhone,
+      deliveryNotes: deliveryNotes ?? this.deliveryNotes,
+      status: status ?? this.status,
+      arrivedAt: arrivedAt ?? this.arrivedAt,
+      completedAt: completedAt ?? this.completedAt,
+      proofPhotoUrl: proofPhotoUrl ?? this.proofPhotoUrl,
+      signatureUrl: signatureUrl ?? this.signatureUrl,
+      completionNotes: completionNotes ?? this.completionNotes,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 
+  // To JSON (for database insert/update)
   Map<String, dynamic> toJson() {
     return {
       'id': id,
-      'type': type,
+      'delivery_id': deliveryId,
+      'stop_number': stopNumber,
+      'stop_type': stopType,
       'address': address,
       'latitude': latitude,
       'longitude': longitude,
-      'contact_name': contactName,
-      'contact_phone': contactPhone,
-      'instructions': instructions,
-      'package_description': packageDescription,
-      'package_weight': packageWeight,
-      'package_value': packageValue,
-      'is_completed': isCompleted,
+      'house_number': houseNumber,
+      'street': street,
+      'barangay': barangay,
+      'city': city,
+      'province': province,
+      'recipient_name': recipientName,
+      'recipient_phone': recipientPhone,
+      'delivery_notes': deliveryNotes,
+      'status': status,
+      'arrived_at': arrivedAt?.toIso8601String(),
+      'completed_at': completedAt?.toIso8601String(),
+      'proof_photo_url': proofPhotoUrl,
+      'signature_url': signatureUrl,
+      'completion_notes': completionNotes,
+      'created_at': createdAt.toIso8601String(),
+      'updated_at': updatedAt?.toIso8601String(),
     };
   }
 
+  // For creating a new stop (before saving to database)
+  Map<String, dynamic> toCreateJson() {
+    return {
+      'delivery_id': deliveryId,
+      'stop_number': stopNumber,
+      'stop_type': stopType,
+      'address': address,
+      'latitude': latitude,
+      'longitude': longitude,
+      'house_number': houseNumber,
+      'street': street,
+      'barangay': barangay,
+      'city': city,
+      'province': province,
+      'recipient_name': recipientName,
+      'recipient_phone': recipientPhone,
+      'delivery_notes': deliveryNotes,
+      'status': status,
+    };
+  }
+
+  // From JSON (for database read)
   factory DeliveryStop.fromJson(Map<String, dynamic> json) {
     return DeliveryStop(
-      id: json['id'],
-      type: json['type'],
-      address: json['address'],
-      latitude: json['latitude']?.toDouble(),
-      longitude: json['longitude']?.toDouble(),
-      contactName: json['contact_name'],
-      contactPhone: json['contact_phone'],
-      instructions: json['instructions'],
-      packageDescription: json['package_description'],
-      packageWeight: json['package_weight']?.toDouble(),
-      packageValue: json['package_value']?.toDouble(),
-      isCompleted: json['is_completed'] ?? false,
+      id: json['id'] as String?,
+      deliveryId: json['delivery_id'] as String,
+      stopNumber: json['stop_number'] as int,
+      stopType: json['stop_type'] as String,
+      address: json['address'] as String,
+      latitude: (json['latitude'] as num).toDouble(),
+      longitude: (json['longitude'] as num).toDouble(),
+      houseNumber: json['house_number'] as String?,
+      street: json['street'] as String?,
+      barangay: json['barangay'] as String?,
+      city: json['city'] as String?,
+      province: json['province'] as String?,
+      recipientName: json['recipient_name'] as String?,
+      recipientPhone: json['recipient_phone'] as String?,
+      deliveryNotes: json['delivery_notes'] as String?,
+      status: json['status'] as String? ?? 'pending',
+      arrivedAt: json['arrived_at'] != null
+          ? DateTime.parse(json['arrived_at'] as String)
+          : null,
+      completedAt: json['completed_at'] != null
+          ? DateTime.parse(json['completed_at'] as String)
+          : null,
+      proofPhotoUrl: json['proof_photo_url'] as String?,
+      signatureUrl: json['signature_url'] as String?,
+      completionNotes: json['completion_notes'] as String?,
+      createdAt: DateTime.parse(json['created_at'] as String),
+      updatedAt: json['updated_at'] != null
+          ? DateTime.parse(json['updated_at'] as String)
+          : null,
     );
   }
 
-  bool get isPickup => type == 'pickup';
-  bool get isDelivery => type == 'delivery';
-  bool get hasValidLocation => latitude != null && longitude != null;
+  // Helper getters for stop type
+  bool get isPickup => stopType == 'pickup';
+  bool get isDropoff => stopType == 'dropoff';
   
-  String get displayIcon => isPickup ? '📦' : '🏁';
-  String get displayTitle => isPickup ? 'Pickup' : 'Delivery';
+  // Status helpers
+  bool get isPending => status == 'pending';
+  bool get isInProgress => status == 'in_progress';
+  bool get isCompleted => status == 'completed';
+  bool get isFailed => status == 'failed';
+  
+  // Display helpers
+  String get displayIcon {
+    if (isPickup) return '📦';
+    return '🏁';
+  }
+  
+  String get displayTitle {
+    if (isPickup) return 'Pickup';
+    return 'Stop $stopNumber';
+  }
+  
+  String get statusDisplayText {
+    switch (status) {
+      case 'pending':
+        return 'Pending';
+      case 'in_progress':
+        return 'In Progress';
+      case 'completed':
+        return 'Completed';
+      case 'failed':
+        return 'Failed';
+      default:
+        return status;
+    }
+  }
+  
+  // Short address for display
+  String get shortAddress {
+    if (street != null && barangay != null) {
+      return '$street, $barangay';
+    }
+    return address;
+  }
 }

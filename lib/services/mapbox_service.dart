@@ -381,6 +381,83 @@ class MapboxService {
       return null;
     }
   }
+
+  /// Get multi-stop route with waypoints (for multi-stop deliveries)
+  static Future<List<Map<String, double>>?> getMultiStopRoute(
+    double startLat, 
+    double startLng, 
+    List<Map<String, dynamic>> waypoints
+  ) async {
+    try {
+      // Build coordinates string: start;waypoint1;waypoint2;...;waypointN
+      String coordinates = '$startLng,$startLat';
+      for (var waypoint in waypoints) {
+        coordinates += ';${waypoint['longitude']},${waypoint['latitude']}';
+      }
+      
+      final url = '$_baseUrl/directions/v5/mapbox/driving/$coordinates?access_token=$_accessToken&geometries=geojson&overview=full';
+      
+      print('🚏 ═══════════════════════════════════════════════');
+      print('🚏 MAPBOX API REQUEST');
+      print('🚏 ═══════════════════════════════════════════════');
+      print('🚏 Coordinates: $coordinates');
+      print('🚏 Waypoints count: ${waypoints.length}');
+      print('🚏 URL: $url');
+      
+      final response = await http.get(Uri.parse(url));
+      
+      print('🚏 Response status: ${response.statusCode}');
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        
+        // Log full response structure for debugging
+        print('🚏 Response structure:');
+        print('   - routes count: ${data['routes']?.length ?? 0}');
+        
+        if (data['routes'] != null && data['routes'].isNotEmpty) {
+          final route = data['routes'][0];
+          
+          // Check if route has legs (multi-waypoint indicator)
+          if (route['legs'] != null) {
+            print('   - legs count: ${route['legs'].length}');
+            print('   - Expected legs: ${waypoints.length} (one per stop)');
+          }
+          
+          final geometry = route['geometry'];
+          if (geometry != null && geometry['coordinates'] != null) {
+            final List<dynamic> coordinatesList = geometry['coordinates'];
+            print('   - geometry coordinates count: ${coordinatesList.length}');
+            print('   - First coordinate: ${coordinatesList.first}');
+            print('   - Last coordinate: ${coordinatesList.last}');
+            
+            final result = coordinatesList.map<Map<String, double>>((coord) => {
+              'lng': coord[0].toDouble(),
+              'lat': coord[1].toDouble(),
+            }).toList();
+            
+            print('✅ Multi-stop route successfully parsed!');
+            print('   - Total points in route: ${result.length}');
+            print('🚏 ═══════════════════════════════════════════════');
+            
+            return result;
+          }
+        }
+        
+        print('❌ No valid route geometry found in response');
+        print('🚏 ═══════════════════════════════════════════════');
+      } else {
+        print('❌ Multi-stop route API error: ${response.statusCode}');
+        print('   Response: ${response.body}');
+        print('🚏 ═══════════════════════════════════════════════');
+      }
+      return null;
+    } catch (e) {
+      print('❌ Multi-stop route error: $e');
+      print('🚏 ═══════════════════════════════════════════════');
+      return null;
+    }
+  }
 }
 
 class MapboxGeocodeSuggestion {

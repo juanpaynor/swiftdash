@@ -1,6 +1,6 @@
 // Enhanced Pair Driver Edge Function with Driver App Integration
 // Finds closest available drivers and assigns directly to delivery
-// Updated: October 8, 2025 - Integration with driver app fixes
+// Updated: October 14, 2025 - Multi-stop delivery support with route-based pricing
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -41,7 +41,7 @@ serve(async (req: Request) => {
     // Get delivery details for proximity calculation
     const { data: delivery, error: deliveryErr } = await supabase
       .from('deliveries')
-      .select('pickup_latitude, pickup_longitude, status, driver_id')
+      .select('pickup_latitude, pickup_longitude, status, driver_id, is_scheduled, scheduled_pickup_time')
       .eq('id', body.deliveryId)
       .single();
 
@@ -59,6 +59,41 @@ serve(async (req: Request) => {
         headers: { 'content-type': 'application/json' },
         status: 400,
       });
+    }
+
+    // ⭐ Check if delivery is scheduled - only assign 15 minutes before pickup
+    if (delivery.is_scheduled && delivery.scheduled_pickup_time) {
+      const scheduledTime = new Date(delivery.scheduled_pickup_time);
+      const now = new Date();
+      const fifteenMinutesBeforePickup = new Date(scheduledTime.getTime() - 15 * 60 * 1000);
+
+      console.log(`⏰ Scheduled delivery detected:`);
+      console.log(`   Scheduled pickup: ${scheduledTime.toISOString()}`);
+      console.log(`   Assignment time: ${fifteenMinutesBeforePickup.toISOString()}`);
+      console.log(`   Current time: ${now.toISOString()}`);
+
+      // Don't assign driver yet if it's too early
+      if (now < fifteenMinutesBeforePickup) {
+        const minutesUntilAssignment = Math.ceil(
+          (fifteenMinutesBeforePickup.getTime() - now.getTime()) / (60 * 1000)
+        );
+        
+        console.log(`⏳ Too early for assignment - waiting ${minutesUntilAssignment} minutes`);
+
+        return new Response(JSON.stringify({
+          ok: false,
+          scheduled: true,
+          message: `Scheduled delivery - driver will be assigned ${minutesUntilAssignment} minutes before pickup`,
+          scheduled_for: delivery.scheduled_pickup_time,
+          assignment_time: fifteenMinutesBeforePickup.toISOString(),
+          minutes_until_assignment: minutesUntilAssignment,
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+
+      console.log(`✅ Scheduled delivery ready for driver assignment`);
     }
 
     console.log(`🔍 Searching for drivers near: ${delivery.pickup_latitude}, ${delivery.pickup_longitude}`);
@@ -129,13 +164,15 @@ serve(async (req: Request) => {
 });
 
 // Offer delivery to driver (requires acceptance) with pricing calculation
+// Updated: October 14, 2025 - Multi-stop support
 async function offerDeliveryToDriver(supabase: any, deliveryId: string, driverId: string, pickupLat: number, pickupLng: number) {
   // First get delivery details to calculate pricing
   const { data: deliveryData, error: deliveryError } = await supabase
     .from('deliveries')
     .select(`
       vehicle_type_id, delivery_latitude, delivery_longitude,
-      vehicle_types!inner(base_price, price_per_km)
+      is_multi_stop, total_stops,
+      vehicle_types!inner(base_price, price_per_km, additional_stop_charge)
     `)
     .eq('id', deliveryId)
     .single();
@@ -145,31 +182,72 @@ async function offerDeliveryToDriver(supabase: any, deliveryId: string, driverId
     throw new Error('Cannot calculate pricing');
   }
 
-  // Calculate distance and pricing
-  const distanceKm = calculateDistance(
-    pickupLat, pickupLng,
-    deliveryData.delivery_latitude, deliveryData.delivery_longitude
-  );
+  let distanceKm = 0;
+  
+  // Multi-stop deliveries: calculate total route distance through all stops
+  if (deliveryData.is_multi_stop) {
+    console.log(`📍 Calculating multi-stop route for ${deliveryData.total_stops} stops`);
+    
+    const { data: stops, error: stopsError } = await supabase
+      .from('delivery_stops')
+      .select('latitude, longitude, stop_number')
+      .eq('delivery_id', deliveryId)
+      .order('stop_number');
+    
+    if (stopsError || !stops || stops.length === 0) {
+      console.error('Failed to get stops for multi-stop delivery:', stopsError);
+      throw new Error('Cannot calculate multi-stop route');
+    }
+    
+    // Calculate total route distance through all stops
+    for (let i = 0; i < stops.length - 1; i++) {
+      const segmentDistance = calculateDistance(
+        stops[i].latitude, stops[i].longitude,
+        stops[i + 1].latitude, stops[i + 1].longitude
+      );
+      distanceKm += segmentDistance;
+      console.log(`  Stop ${i} → Stop ${i + 1}: ${segmentDistance.toFixed(2)}km`);
+    }
+    
+    console.log(`  Total multi-stop distance: ${distanceKm.toFixed(2)}km`);
+  } else {
+    // Single-stop delivery: pickup to dropoff
+    distanceKm = calculateDistance(
+      pickupLat, pickupLng,
+      deliveryData.delivery_latitude, deliveryData.delivery_longitude
+    );
+  }
 
+  // Calculate pricing with multi-stop support
   const basePrice = Number(deliveryData.vehicle_types.base_price) || 0;
   const pricePerKm = Number(deliveryData.vehicle_types.price_per_km) || 0;
-  const subtotal = basePrice + (pricePerKm * distanceKm);
+  const additionalStopCharge = Number(deliveryData.vehicle_types.additional_stop_charge) || 0;
+  
+  // Multi-stop pricing: charge for each additional stop beyond the first dropoff
+  const additionalStops = deliveryData.is_multi_stop ? Math.max(0, (deliveryData.total_stops - 1)) : 0;
+  const additionalStopsTotal = additionalStops * additionalStopCharge;
+  
+  const subtotal = basePrice + (pricePerKm * distanceKm) + additionalStopsTotal;
   
   // Add 12% VAT (Philippine requirement)
   const vatRate = 0.12;
   const vat = subtotal * vatRate;
   const totalAmount = Math.max(1, Math.round((subtotal + vat) * 100) / 100);
 
-  console.log(`💰 Calculated pricing: Distance ${distanceKm.toFixed(2)}km, Base ₱${basePrice}, Distance ₱${(pricePerKm * distanceKm).toFixed(2)}, VAT ₱${vat.toFixed(2)}, Total ₱${totalAmount.toFixed(2)}`);
+  if (deliveryData.is_multi_stop) {
+    console.log(`💰 Multi-stop pricing: ${deliveryData.total_stops} stops (${additionalStops} additional), Distance ${distanceKm.toFixed(2)}km, Base ₱${basePrice}, Distance ₱${(pricePerKm * distanceKm).toFixed(2)}, Additional stops ₱${additionalStopsTotal.toFixed(2)}, VAT ₱${vat.toFixed(2)}, Total ₱${totalAmount.toFixed(2)}`);
+  } else {
+    console.log(`💰 Single-stop pricing: Distance ${distanceKm.toFixed(2)}km, Base ₱${basePrice}, Distance ₱${(pricePerKm * distanceKm).toFixed(2)}, VAT ₱${vat.toFixed(2)}, Total ₱${totalAmount.toFixed(2)}`);
+  }
 
   // Update delivery with driver assignment, status, and calculated pricing
   const { error } = await supabase
     .from('deliveries')
     .update({
       driver_id: driverId,
-      status: 'driver_offered',  // Now using proper offer status
+      status: 'driver_offered',
       distance_km: Math.round(distanceKm * 10) / 10, // Round to 1 decimal
-      total_amount: totalAmount, // ✅ NOW CALCULATING PRICING!
+      total_amount: totalAmount,
       updated_at: new Date().toISOString()
     })
     .eq('id', deliveryId);

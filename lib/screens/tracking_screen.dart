@@ -4,8 +4,14 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/realtime_service.dart';
 import '../services/delivery_service.dart';
+import '../services/multi_stop_service.dart';
 import '../models/delivery.dart';
+import '../models/delivery_stop.dart';
 import '../widgets/shared_delivery_map.dart';
+import '../widgets/vertical_progress_stepper.dart';
+import '../widgets/modern_floating_card.dart';
+import '../widgets/modern_top_navigation.dart';
+import '../constants/modern_colors.dart';
 import '../utils/back_button_handler.dart';
 
 /// Uber-style tracking screen with full-screen map and floating overlay cards
@@ -32,12 +38,14 @@ class TrackingScreen extends StatefulWidget {
 
 class _TrackingScreenState extends State<TrackingScreen> {
   final CustomerRealtimeService _realtimeService = CustomerRealtimeService();
+  final MultiStopService _multiStopService = MultiStopService();
   
   late StreamSubscription _locationSubscription;
   late StreamSubscription _deliverySubscription;
   late StreamSubscription _driverSubscription;
   
   Delivery? _delivery;
+  List<DeliveryStop> _stops = [];
   Map<String, dynamic>? _driverLocation;
   Map<String, dynamic>? _driverProfile;
   bool _isLoading = true;
@@ -69,6 +77,21 @@ class _TrackingScreenState extends State<TrackingScreen> {
 
       setState(() {
         _delivery = delivery;
+      });
+
+      // Load stops if this is a multi-stop delivery
+      if (delivery.isMultiStop) {
+        try {
+          final stops = await _multiStopService.getStops(widget.deliveryId);
+          setState(() {
+            _stops = stops;
+          });
+        } catch (e) {
+          debugPrint('Failed to load stops: $e');
+        }
+      }
+
+      setState(() {
         _isLoading = false;
       });
 
@@ -385,190 +408,44 @@ class _TrackingScreenState extends State<TrackingScreen> {
     );
   }
 
-  Future<void> _cancelDelivery() async {
-    // Show warning dialog first
-    final bool? shouldCancel = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text(
-            'Cancel Delivery?',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-          content: const Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Are you sure you want to cancel this delivery?',
-                style: TextStyle(fontSize: 16),
-              ),
-              SizedBox(height: 12),
-              Text(
-                '⚠️ Frequent cancellations may result in longer wait times for future deliveries.',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.orange,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text(
-                'Keep Delivery',
-                style: TextStyle(color: Colors.grey),
-              ),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              child: const Text('Cancel Delivery'),
-            ),
-          ],
-        );
-      },
-    );
 
-    if (shouldCancel != true) return;
 
-    try {
-      // Show loading
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
 
-      // Cancel the delivery
-      await DeliveryService.cancelDelivery(widget.deliveryId);
-
-      // Close loading dialog
-      if (mounted) Navigator.of(context).pop();
-      
-      // Show success message
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Delivery cancelled successfully'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-        
-        // Navigate back to home after a short delay
-        Future.delayed(const Duration(seconds: 1), () {
-          if (mounted) {
-            context.go('/');
-          }
-        });
-      }
-      
-    } catch (e) {
-      // Close loading dialog
-      if (mounted) Navigator.of(context).pop();
-      
-      // Show error message
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to cancel delivery: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  String _getStatusText() {
-    if (_delivery == null) return 'Loading...';
-    
-    switch (_delivery!.status) {
-      case 'pending':
-        return 'Looking for a driver';
-      case 'driver_offered':
-        return 'Driver found - waiting for acceptance';
-      case 'driver_assigned':
-        return 'Driver is preparing for pickup';
-      case 'going_to_pickup':
-        return 'Driver is heading to pickup location';
-      case 'pickup_arrived':
-        return 'Driver has arrived at pickup';
-      case 'package_collected':
-        return 'Package collected - heading to delivery';
-      case 'going_to_destination':
-        return 'Driver is on the way to you';
-      case 'at_destination':
-        return 'Driver has arrived at your location';
-      case 'in_transit':
-        return 'Your delivery is on the way';
-      case 'delivered':
-        return 'Delivery completed successfully';
-      case 'cancelled':
-        return 'Delivery cancelled';
-      case 'failed':
-        return 'Delivery failed';
-      default:
-        return _delivery!.status.replaceAll('_', ' ').toUpperCase();
-    }
-  }
-
-  Color _getStatusColor() {
-    if (_delivery == null) return Colors.grey;
-    
-    switch (_delivery!.status) {
-      case 'pending':
-        return Colors.orange;
-      case 'driver_offered':
-        return Colors.amber;
-      case 'driver_assigned':
-      case 'going_to_pickup':
-      case 'pickup_arrived':
-        return Colors.blue;
-      case 'package_collected':
-      case 'going_to_destination':
-      case 'at_destination':
-      case 'in_transit':
-        return Colors.purple;
-      case 'delivered':
-        return Colors.green;
-      case 'cancelled':
-      case 'failed':
-        return Colors.red;
-      default:
-        return Colors.grey;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
       return Scaffold(
-        body: const Center(child: CircularProgressIndicator()),
+        backgroundColor: ModernColors.screenBackground,
+        body: const Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(ModernColors.primaryBlue),
+          ),
+        ),
       );
     }
 
     if (_error != null) {
       return Scaffold(
+        backgroundColor: ModernColors.screenBackground,
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(_error!),
+              Text(
+                _error!,
+                style: const TextStyle(color: ModernColors.darkGrey),
+              ),
+              const SizedBox(height: 16),
               ElevatedButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Go Back'),
+                onPressed: () => context.go('/home'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: ModernColors.primaryBlue,
+                ),
+                child: const Text(
+                  'Go Back',
+                  style: TextStyle(color: Colors.white),
+                ),
               ),
             ],
           ),
@@ -578,19 +455,24 @@ class _TrackingScreenState extends State<TrackingScreen> {
 
     return SmartBackHandler(
       child: Scaffold(
+        backgroundColor: ModernColors.screenBackground,
         body: Stack(
-        children: [
-          // Full-screen live map (Uber/DoorDash style)
-          _buildFullScreenMap(),
-          
-          // Top status bar (floating over map)
-          _buildTopStatusBar(),
-          
-          // Draggable bottom sheet (Uber-style)
-          _buildDraggableBottomSheet(),
-        ],
+          children: [
+            // Full-screen immersive map
+            _buildFullScreenMap(),
+            
+            // Modern top navigation bar
+            _buildModernTopNavigation(),
+            
+            // Vertical progress stepper (left side)
+            if (_delivery != null) _buildVerticalProgressStepper(),
+            
+            // Modern floating focus card (bottom)
+            if (_delivery != null) _buildModernFloatingCard(),
+          ],
+        ),
       ),
-    ));
+    );
   }
 
   // Full-screen map with real-time driver tracking
@@ -624,71 +506,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
     );
   }
 
-  // Top floating status bar
-  Widget _buildTopStatusBar() {
-    return Positioned(
-      top: MediaQuery.of(context).padding.top + 16,
-      left: 16,
-      right: 16,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.1),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            // Back button - Fixed navigation
-            GestureDetector(
-              onTap: () {
-                // Use go_router for proper navigation
-                context.go('/');
-              },
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.grey[100],
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: const Icon(Icons.arrow_back_ios_rounded, size: 16),
-              ),
-            ),
-            const SizedBox(width: 16),
-            
-            // Status indicator
-            Container(
-              width: 12,
-              height: 12,
-              decoration: BoxDecoration(
-                color: _getStatusColor(),
-                shape: BoxShape.circle,
-              ),
-            ),
-            const SizedBox(width: 12),
-            
-            // Status text
-            Expanded(
-              child: Text(
-                _getStatusText(),
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+
 
   // Route calculation results
   double? _routeDistanceKm;
@@ -703,730 +521,14 @@ class _TrackingScreenState extends State<TrackingScreen> {
     print('📊 Route calculated: ${distanceKm.toStringAsFixed(1)}km, ${estimatedMinutes.toStringAsFixed(0)} min');
   }
 
-  // Draggable bottom sheet (Uber/DoorDash style)
-  Widget _buildDraggableBottomSheet() {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.3, // Start at 30% of screen height
-      minChildSize: 0.2,     // Minimum 20% (collapsed)
-      maxChildSize: 0.8,     // Maximum 80% (expanded)
-      builder: (context, scrollController) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(24),
-              topRight: Radius.circular(24),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black12,
-                blurRadius: 10,
-                offset: Offset(0, -5),
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-              // Drag handle
-              Container(
-                margin: const EdgeInsets.only(top: 12, bottom: 8),
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              
-              // Scrollable content
-              Expanded(
-                child: SingleChildScrollView(
-                  controller: scrollController,
-                  padding: const EdgeInsets.all(20),
-                  child: _buildBottomSheetContent(),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
 
-  // Bottom sheet content
-  Widget _buildBottomSheetContent() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Delivery info header
-        _buildDeliveryHeader(),
-        
-        const SizedBox(height: 24),
-        
-        // Driver info (if assigned)
-        if (_delivery?.driverId != null) ...[
-          _buildDriverSection(),
-          const SizedBox(height: 24),
-        ],
-        
-        // Route phase indicator (polyline visualization)
-        _buildRoutePhaseIndicator(),
-        
-        const SizedBox(height: 24),
-        
-        // Live location updates debug info
-        _buildLocationDebugSection(),
-        
-        const SizedBox(height: 24),
-        
-        // Delivery progress timeline
-        _buildDeliveryProgress(),
-        
-        const SizedBox(height: 24),
-        
-        // Delivery details
-        _buildDeliveryDetails(),
-        
-        const SizedBox(height: 24),
-        
-        // Action buttons
-        _buildActionButtons(),
-        
-        // Add some bottom padding for safe area
-        const SizedBox(height: 100),
-      ],
-    );
-  }
 
-  Widget _buildDeliveryHeader() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Delivery #${widget.deliveryId.substring(0, 8)}',
-          style: const TextStyle(
-            fontSize: 14,
-            color: Colors.grey,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          _getRoutePhaseMessage(),
-          style: const TextStyle(
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
-            color: Colors.black87,
-          ),
-        ),
-        
-        // Enhanced ETA and route info
-        if (_driverLocation != null || _estimatedMinutes != null) ...[
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Icon(
-                Icons.access_time, 
-                size: 16, 
-                color: _getETAColor(),
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  _getEstimatedTime(),
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: _getETAColor(),
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          
-          // Route distance info (if available)
-          if (_routeDistanceKm != null && _routeDistanceKm! > 0) ...[
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                Icon(
-                  Icons.route, 
-                  size: 16, 
-                  color: Colors.grey[600],
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  'Route distance: ${_routeDistanceKm!.toStringAsFixed(1)} km',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey[600],
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ] else if (_delivery?.status == 'driver_assigned' || _delivery?.status == 'pickup_arrived') ...[
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Icon(Icons.access_time, size: 16, color: Colors.orange[600]),
-              const SizedBox(width: 4),
-              Text(
-                'Preparing for pickup...',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.orange[600],
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ],
-    );
-  }
 
-  // Get appropriate color for ETA display based on delivery phase
-  Color _getETAColor() {
-    if (_delivery == null) return Colors.grey;
-    
-    switch (_delivery!.status) {
-      case 'driver_assigned':
-      case 'going_to_pickup':
-        return Colors.blue[600]!; // Blue for pickup phase
-      case 'package_collected':
-      case 'going_to_destination':
-      case 'in_transit':
-        return Colors.purple[600]!; // Purple for delivery phase
-      case 'pickup_arrived':
-      case 'at_destination':
-        return Colors.green[600]!; // Green for arrival
-      default:
-        return Colors.grey[600]!;
-    }
-  }
 
-  Widget _buildDriverSection() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.grey[50],
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey[200]!),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Your Driver',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 16),
-          
-          Row(
-            children: [
-              // Driver avatar with profile picture
-              CircleAvatar(
-                radius: 28,
-                backgroundColor: Colors.blue[100],
-                backgroundImage: _driverProfile?['profile_picture_url'] != null 
-                    ? NetworkImage(_driverProfile!['profile_picture_url']) 
-                    : null,
-                child: _driverProfile?['profile_picture_url'] == null 
-                    ? const Icon(Icons.person, color: Colors.blue, size: 28)
-                    : null,
-              ),
-              const SizedBox(width: 16),
-              
-              // Driver info
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Driver name
-                    Text(
-                      _driverProfile?['full_name'] ?? 'Loading driver info...',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    
-                    // Vehicle type and model
-                    if (_driverProfile?['vehicle_types'] != null || _driverProfile?['vehicle_model'] != null)
-                      Row(
-                        children: [
-                          Icon(Icons.directions_car, size: 16, color: Colors.grey[600]),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              '${_driverProfile?['vehicle_types']?['name'] ?? 'Vehicle'} ${_driverProfile?['vehicle_model'] ?? ''}',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey[600],
-                                fontWeight: FontWeight.w500,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    
-                    // Plate number
-                    if (_driverProfile?['plate_number'] != null) ...[
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
-                          Icon(Icons.confirmation_number, size: 16, color: Colors.grey[600]),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              _driverProfile!['plate_number'],
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Colors.grey[600],
-                                fontWeight: FontWeight.w500,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                    
-                    // Driver rating and deliveries
-                    if (_driverProfile?['rating'] != null) ...[
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Icon(Icons.star, size: 16, color: Colors.amber[600]),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              '${_driverProfile!['rating'].toStringAsFixed(1)} • ${_driverProfile?['total_deliveries'] ?? 0} deliveries',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Colors.grey[600],
-                                fontWeight: FontWeight.w500,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          if (_driverProfile?['is_verified'] == true) ...[
-                            const SizedBox(width: 8),
-                            Icon(
-                              Icons.verified,
-                              size: 16,
-                              color: Colors.blue[600],
-                            ),
-                          ],
-                        ],
-                      ),
-                    ],
-                    
-                    // Last location update
-                    if (_driverLocation != null) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        'Last updated: ${_formatLastUpdate()}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              
-              // Action buttons
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildActionButton(
-                    icon: Icons.phone,
-                    color: Colors.green,
-                    onPressed: _callDriver,
-                  ),
-                  const SizedBox(width: 8),
-                  _buildActionButton(
-                    icon: Icons.message,
-                    color: Colors.blue,
-                    onPressed: _messageDriver,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
 
-  Widget _buildActionButton({
-    required IconData icon,
-    required Color color,
-    required VoidCallback onPressed,
-  }) {
-    return GestureDetector(
-      onTap: onPressed,
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Icon(icon, color: Colors.white, size: 20),
-      ),
-    );
-  }
 
-  Widget _buildRoutePhaseIndicator() {
-    if (_delivery == null) return const SizedBox.shrink();
-    
-    // Determine current phase
-    final String currentPhase = _getCurrentRoutePhase();
-    if (currentPhase == 'none') return const SizedBox.shrink();
-    
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: _getPhaseBackgroundColor(),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _getPhaseBorderColor()),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: _getPhaseIconColor().withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  _getPhaseIcon(),
-                  color: _getPhaseIconColor(),
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _getPhaseTitle(),
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: _getPhaseIconColor(),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _getPhaseDescription(),
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          
-          // Route visualization indicator
-          if (_routeDistanceKm != null || _estimatedMinutes != null) ...[
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.8),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  // Polyline color indicator
-                  Container(
-                    width: 4,
-                    height: 20,
-                    decoration: BoxDecoration(
-                      color: _getPolylineColor(),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'Route active on map',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
-                  ),
-                  if (_routeDistanceKm != null) ...[
-                    Text(
-                      '${_routeDistanceKm!.toStringAsFixed(1)}km',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: _getPhaseIconColor(),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  String _getCurrentRoutePhase() {
-    if (_delivery == null) return 'none';
-    
-    switch (_delivery!.status) {
-      case 'driver_assigned':
-      case 'going_to_pickup':
-        return 'driverToPickup';
-      case 'package_collected':
-      case 'going_to_destination':
-      case 'in_transit':
-        return 'pickupToDelivery';
-      default:
-        return 'none';
-    }
-  }
-
-  Color _getPhaseBackgroundColor() {
-    final phase = _getCurrentRoutePhase();
-    switch (phase) {
-      case 'driverToPickup':
-        return Colors.blue[50]!;
-      case 'pickupToDelivery':
-        return Colors.purple[50]!;
-      default:
-        return Colors.grey[50]!;
-    }
-  }
-
-  Color _getPhaseBorderColor() {
-    final phase = _getCurrentRoutePhase();
-    switch (phase) {
-      case 'driverToPickup':
-        return Colors.blue[200]!;
-      case 'pickupToDelivery':
-        return Colors.purple[200]!;
-      default:
-        return Colors.grey[200]!;
-    }
-  }
-
-  Color _getPhaseIconColor() {
-    final phase = _getCurrentRoutePhase();
-    switch (phase) {
-      case 'driverToPickup':
-        return Colors.blue[600]!;
-      case 'pickupToDelivery':
-        return Colors.purple[600]!;
-      default:
-        return Colors.grey[600]!;
-    }
-  }
-
-  IconData _getPhaseIcon() {
-    final phase = _getCurrentRoutePhase();
-    switch (phase) {
-      case 'driverToPickup':
-        return Icons.my_location;
-      case 'pickupToDelivery':
-        return Icons.local_shipping;
-      default:
-        return Icons.route;
-    }
-  }
-
-  String _getPhaseTitle() {
-    final phase = _getCurrentRoutePhase();
-    switch (phase) {
-      case 'driverToPickup':
-        return 'Phase 1: Heading to Pickup';
-      case 'pickupToDelivery':
-        return 'Phase 2: Delivery in Progress';
-      default:
-        return 'Route Planning';
-    }
-  }
-
-  String _getPhaseDescription() {
-    final phase = _getCurrentRoutePhase();
-    switch (phase) {
-      case 'driverToPickup':
-        return 'Driver is traveling to collect your package';
-      case 'pickupToDelivery':
-        return 'Package collected, driver heading to you';
-      default:
-        return 'Calculating optimal route';
-    }
-  }
-
-  Color _getPolylineColor() {
-    final phase = _getCurrentRoutePhase();
-    switch (phase) {
-      case 'driverToPickup':
-        return Colors.blue;
-      case 'pickupToDelivery':
-        return Colors.purple;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  Widget _buildLocationDebugSection() {
-    if (_driverLocation == null) return const SizedBox.shrink();
-    
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.green[50],
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.green[200]!),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.wifi_tethering, color: Colors.green[700], size: 20),
-              const SizedBox(width: 8),
-              Text(
-                'Live Tracking Active',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.green[700],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Channel: driver-location-${widget.deliveryId}',
-            style: const TextStyle(fontSize: 12, color: Colors.grey),
-            overflow: TextOverflow.ellipsis,
-            maxLines: 1,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Lat: ${_driverLocation!['latitude']?.toString() ?? 'N/A'}',
-            style: const TextStyle(fontSize: 12, color: Colors.grey),
-          ),
-          Text(
-            'Lng: ${_driverLocation!['longitude']?.toString() ?? 'N/A'}',
-            style: const TextStyle(fontSize: 12, color: Colors.grey),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDeliveryDetails() {
-    if (_delivery == null) return const SizedBox.shrink();
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Delivery Details',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: Colors.black87,
-          ),
-        ),
-        const SizedBox(height: 16),
-        
-        // Pickup location
-        _buildLocationRow(
-          icon: Icons.my_location,
-          iconColor: Colors.green,
-          title: 'Pickup',
-          address: _delivery!.pickupAddress,
-        ),
-        
-        const SizedBox(height: 16),
-        
-        // Delivery location
-        _buildLocationRow(
-          icon: Icons.location_on,
-          iconColor: Colors.red,
-          title: 'Delivery',
-          address: _delivery!.deliveryAddress,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLocationRow({
-    required IconData icon,
-    required Color iconColor,
-    required String title,
-    required String address,
-  }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: iconColor.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(icon, color: iconColor, size: 16),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                address,
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey,
-                  height: 1.4,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
+  // Helper methods for modern UI components
+  
   String _formatLastUpdate() {
     if (_driverLocation?['timestamp'] == null) return 'Unknown';
     
@@ -1487,265 +589,554 @@ class _TrackingScreenState extends State<TrackingScreen> {
     return '20-30 min';
   }
 
-  String _getRoutePhaseMessage() {
-    if (_delivery == null) return '';
-    
-    switch (_delivery!.status) {
-      case 'driver_assigned':
-      case 'going_to_pickup':
-        return '🚗 Driver is heading to pickup location';
-      case 'package_collected':
-      case 'going_to_destination':
-      case 'in_transit':
-        return '🚚 Driver has your package and is on the way';
-      case 'pickup_arrived':
-        return '📍 Driver has arrived at pickup location';
-      case 'at_destination':
-        return '🏁 Driver has arrived at your location';
-      default:
-        return _getStatusText();
-    }
+  // Modern UI Components
+
+  Widget _buildModernTopNavigation() {
+    return ModernTopNavigationBar(
+      orderNumber: widget.deliveryId,
+      onBackPressed: () => context.go('/home'),
+      onHelpPressed: () => _showHelpDialog(),
+    );
   }
 
-  Widget _buildDeliveryProgress() {
-    final currentStatus = _delivery?.status ?? 'pending';
-    final steps = [
-      {'status': 'pending', 'title': 'Order placed', 'icon': Icons.check_circle},
-      {'status': 'driver_offered', 'title': 'Driver found', 'icon': Icons.search},
-      {'status': 'driver_assigned', 'title': 'Driver assigned', 'icon': Icons.person},
-      {'status': 'going_to_pickup', 'title': 'Heading to pickup', 'icon': Icons.directions},
-      {'status': 'pickup_arrived', 'title': 'Driver at pickup', 'icon': Icons.my_location},
-      {'status': 'package_collected', 'title': 'Package collected', 'icon': Icons.inventory},
-      {'status': 'going_to_destination', 'title': 'On the way to you', 'icon': Icons.local_shipping},
-      {'status': 'at_destination', 'title': 'Driver arrived', 'icon': Icons.location_on},
-      {'status': 'delivered', 'title': 'Delivered', 'icon': Icons.check_circle_outline},
-    ];
+  Widget _buildVerticalProgressStepper() {
+    final currentStage = DeliveryStage.fromStatus(_delivery?.status);
+    return Positioned(
+      left: 24,
+      top: 140,
+      child: VerticalProgressStepper(
+        currentStage: currentStage,
+      ),
+    );
+  }
+
+  Widget _buildModernFloatingCard() {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: ModernFloatingCard(
+        eta: _getEstimatedTime(),
+        arrivalTime: _calculateArrivalTime(),
+        driverName: _driverProfile?['full_name'],
+        driverRating: _driverProfile?['rating']?.toDouble(),
+        vehicleInfo: _getVehicleInfo(),
+        plateNumber: _driverProfile?['plate_number'],
+        driverPhotoUrl: _driverProfile?['profile_picture_url'],
+        onCallDriver: _callDriver,
+        onMessageDriver: _messageDriver,
+        deliveryStatus: _delivery?.status,
+        additionalContent: _buildAdditionalCardContent(),
+      ),
+    );
+  }
+
+  Widget _buildAdditionalCardContent() {
+    return Column(
+      children: [
+        // Multi-stop progress indicator
+        if (_delivery != null && _delivery!.isMultiStop && _stops.isNotEmpty) ...[
+          _buildMultiStopProgress(),
+          const SizedBox(height: 12),
+        ],
+        
+        // Route information if available
+        if (_routeDistanceKm != null && _routeDistanceKm! > 0)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: ModernColors.accentBackground,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: ModernColors.borderGrey,
+                width: 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.route,
+                  size: 16,
+                  color: ModernColors.primaryBlue,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Route distance: ${_routeDistanceKm!.toStringAsFixed(1)} km',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: ModernColors.mediumGrey,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        
+        // Debug information (can be removed in production)
+        if (_driverLocation != null) ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: ModernColors.blueVeryLight,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: ModernColors.blueLight,
+                width: 1,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.wifi_tethering,
+                      size: 14,
+                      color: ModernColors.primaryBlue,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Live Tracking Active',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: ModernColors.primaryBlue,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Last update: ${_formatLastUpdate()}',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: ModernColors.mediumGrey,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildMultiStopProgress() {
+    final completedStops = _stops.where((s) => s.isCompleted).length;
+    final totalStops = _stops.length;
+    final currentStop = _multiStopService.getCurrentStop(_stops);
+    final progress = _multiStopService.calculateProgress(_stops);
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.grey[50],
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey[200]!),
+        color: ModernColors.blueVeryLight,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: ModernColors.primaryBlue.withOpacity(0.3),
+          width: 1,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Delivery Progress',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: Colors.black87,
+          Row(
+            children: [
+              Icon(
+                Icons.route,
+                size: 18,
+                color: ModernColors.primaryBlue,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Multi-Stop Delivery',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: ModernColors.primaryBlue,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: ModernColors.primaryBlue,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '$completedStops of $totalStops',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          
+          // Progress bar
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progress / 100,
+              backgroundColor: Colors.grey[300],
+              valueColor: AlwaysStoppedAnimation<Color>(ModernColors.primaryBlue),
+              minHeight: 6,
             ),
           ),
-          const SizedBox(height: 16),
-          ...steps.asMap().entries.map((entry) {
-            final index = entry.key;
-            final step = entry.value;
-            final isCompleted = _isStepCompleted(step['status'] as String, currentStatus);
-            final isCurrent = step['status'] == currentStatus;
-            
-            return _buildProgressStep(
-              icon: step['icon'] as IconData,
-              title: step['title'] as String,
-              isCompleted: isCompleted,
-              isCurrent: isCurrent,
-              isLast: index == steps.length - 1,
-            );
-          }).toList(),
+          const SizedBox(height: 12),
+          
+          // Current stop info
+          if (currentStop != null)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CircleAvatar(
+                  radius: 12,
+                  backgroundColor: ModernColors.primaryBlue,
+                  child: Text(
+                    '${currentStop.stopNumber}',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        currentStop.isPickup ? 'At Pickup' : 'Stop ${currentStop.stopNumber - 1}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: ModernColors.darkGrey,
+                        ),
+                      ),
+                      Text(
+                        currentStop.shortAddress,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: ModernColors.mediumGrey,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          
+          // View all stops button
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: _showAllStopsDialog,
+            style: TextButton.styleFrom(
+              padding: EdgeInsets.zero,
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'View all stops',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: ModernColors.primaryBlue,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  Icons.arrow_forward_ios,
+                  size: 12,
+                  color: ModernColors.primaryBlue,
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 
-  bool _isStepCompleted(String stepStatus, String currentStatus) {
-    final statusOrder = [
-      'pending', 'driver_offered', 'driver_assigned', 'going_to_pickup', 
-      'pickup_arrived', 'package_collected', 'going_to_destination', 
-      'at_destination', 'in_transit', 'delivered'
-    ];
-    
-    final stepIndex = statusOrder.indexOf(stepStatus);
-    final currentIndex = statusOrder.indexOf(currentStatus);
-    
-    return stepIndex <= currentIndex && stepIndex != -1 && currentIndex != -1;
-  }
-
-  Widget _buildProgressStep({
-    required IconData icon,
-    required String title,
-    required bool isCompleted,
-    required bool isCurrent,
-    required bool isLast,
-  }) {
-    return Row(
-      children: [
-        Column(
-          children: [
-            Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: isCompleted || isCurrent ? Colors.blue : Colors.grey[300],
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                icon,
-                size: 16,
-                color: isCompleted || isCurrent ? Colors.white : Colors.grey[600],
-              ),
+  void _showAllStopsDialog() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.5,
+        maxChildSize: 0.9,
+        builder: (context, scrollController) {
+          return Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
             ),
-            if (!isLast)
-              Container(
-                width: 2,
-                height: 24,
-                color: isCompleted ? Colors.blue : Colors.grey[300],
-              ),
-          ],
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Padding(
-            padding: EdgeInsets.only(bottom: isLast ? 0 : 24),
-            child: Text(
-              title,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: isCurrent ? FontWeight.w600 : FontWeight.normal,
-                color: isCompleted || isCurrent ? Colors.black87 : Colors.grey[600],
-              ),
+            child: Column(
+              children: [
+                // Handle bar
+                Container(
+                  margin: const EdgeInsets.only(top: 12, bottom: 8),
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                
+                // Title
+                Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.route,
+                        color: ModernColors.primaryBlue,
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        'Delivery Stops',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: ModernColors.darkGrey,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                // Stops list
+                Expanded(
+                  child: ListView.builder(
+                    controller: scrollController,
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    itemCount: _stops.length,
+                    itemBuilder: (context, index) {
+                      final stop = _stops[index];
+                      final currentStop = _multiStopService.getCurrentStop(_stops);
+                      return _buildStopListItem(stop, stop.id == currentStop?.id);
+                    },
+                  ),
+                ),
+              ],
             ),
-          ),
-        ),
-      ],
+          );
+        },
+      ),
     );
   }
 
-  Widget _buildActionButtons() {
-    final canCancel = _delivery?.status != 'delivered' && 
-                     _delivery?.status != 'cancelled' && 
-                     _delivery?.status != 'failed';
+  Widget _buildStopListItem(DeliveryStop stop, bool isCurrent) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isCurrent ? ModernColors.blueVeryLight : Colors.grey[50],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isCurrent ? ModernColors.primaryBlue : Colors.grey[300]!,
+          width: isCurrent ? 2 : 1,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Stop number badge
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: stop.isCompleted
+                  ? Colors.green
+                  : isCurrent
+                      ? ModernColors.primaryBlue
+                      : Colors.grey[400],
+              shape: BoxShape.circle,
+            ),
+            child: Center(
+              child: stop.isCompleted
+                  ? const Icon(Icons.check, color: Colors.white, size: 18)
+                  : Text(
+                      stop.isPickup ? '📦' : '${stop.stopNumber}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          
+          // Stop details
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      stop.displayTitle,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: isCurrent ? ModernColors.primaryBlue : ModernColors.darkGrey,
+                      ),
+                    ),
+                    const Spacer(),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: _getStatusColor(stop.status).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        stop.statusDisplayText,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: _getStatusColor(stop.status),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  stop.shortAddress,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: ModernColors.mediumGrey,
+                  ),
+                ),
+                if (stop.recipientName != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    stop.recipientName!,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: ModernColors.mediumGrey,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-    return Column(
-      children: [
-        // Cancel delivery button (only if not delivered/cancelled)
-        if (canCancel)
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: _cancelDelivery,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.red,
-                side: const BorderSide(color: Colors.red),
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: const Text(
-                'Cancel Delivery',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ),
-        
-        if (canCancel) const SizedBox(height: 12),
-        
-        // Debug: Test WebSocket Connection
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton(
-            onPressed: () async {
-              await _realtimeService.debugWebSocketConnection();
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('WebSocket connection test completed - check debug logs')),
-                );
-              }
-            },
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.orange,
-              side: const BorderSide(color: Colors.orange),
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            child: const Text(
-              'Test WebSocket Connection',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'completed':
+        return Colors.green;
+      case 'in_progress':
+        return ModernColors.primaryBlue;
+      case 'failed':
+        return Colors.red;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  String? _getVehicleInfo() {
+    final vehicleType = _driverProfile?['vehicle_types']?['name'];
+    final vehicleModel = _driverProfile?['vehicle_model'];
+    
+    if (vehicleType != null && vehicleModel != null) {
+      return '$vehicleType - $vehicleModel';
+    } else if (vehicleType != null) {
+      return vehicleType;
+    } else if (vehicleModel != null) {
+      return vehicleModel;
+    }
+    return null;
+  }
+
+  String _calculateArrivalTime() {
+    if (_estimatedMinutes != null) {
+      final now = DateTime.now();
+      final arrival = now.add(Duration(minutes: _estimatedMinutes!.round()));
+      return '${arrival.hour.toString().padLeft(2, '0')}:${arrival.minute.toString().padLeft(2, '0')}';
+    }
+    return 'Calculating...';
+  }
+
+  void _showHelpDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Text(
+          'Need Help?',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            color: ModernColors.darkGrey,
           ),
         ),
-        
-        const SizedBox(height: 8),
-        
-        // Debug: Test Manual Broadcast
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton(
-            onPressed: () async {
-              await _realtimeService.testBroadcastLocation(widget.deliveryId);
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Test broadcast sent - check debug logs for results')),
-                );
-              }
-            },
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.purple,
-              side: const BorderSide(color: Colors.purple),
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            child: const Text(
-              'Test Manual Broadcast',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+        content: const Text(
+          'Contact our support team for assistance with your delivery.',
+          style: TextStyle(
+            fontSize: 14,
+            color: ModernColors.mediumGrey,
           ),
         ),
-        
-        const SizedBox(height: 12),
-        
-        // Help/Support button
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton(
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: ModernColors.mediumGrey),
+            ),
+          ),
+          ElevatedButton(
             onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Support feature coming soon')),
-              );
+              Navigator.of(context).pop();
+              // TODO: Implement contact support
             },
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.blue,
-              side: const BorderSide(color: Colors.blue),
-              padding: const EdgeInsets.symmetric(vertical: 16),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: ModernColors.primaryBlue,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(8),
               ),
             ),
             child: const Text(
-              'Get Help',
+              'Contact Support',
               style: TextStyle(
-                fontSize: 16,
+                color: Colors.white,
                 fontWeight: FontWeight.w600,
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

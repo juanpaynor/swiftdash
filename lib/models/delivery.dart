@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'delivery_stop.dart';
 
 class Delivery {
   final String id;
@@ -31,6 +32,16 @@ class Delivery {
   final double? distanceKm;
   final int? estimatedDuration;
   final double totalPrice;
+
+  // Multi-Stop Support
+  final bool isMultiStop;
+  final int? totalStops;
+  final int? currentStopIndex;
+  final List<DeliveryStop>? stops; // Loaded separately if needed
+
+  // Scheduled Delivery Support
+  final bool isScheduled;
+  final DateTime? scheduledPickupTime;
 
   // Status
   final String status;
@@ -78,6 +89,12 @@ class Delivery {
     this.distanceKm,
     this.estimatedDuration,
     required this.totalPrice,
+    this.isMultiStop = false,
+    this.totalStops,
+    this.currentStopIndex,
+    this.stops,
+    this.isScheduled = false,
+    this.scheduledPickupTime,
     required this.status,
     this.customerRating,
     this.driverRating,
@@ -123,6 +140,12 @@ class Delivery {
           (json['distance_km'] as num).toDouble() : null,
       estimatedDuration: json['estimated_duration'] as int?,
       totalPrice: (json['total_price'] as num).toDouble(),
+      isMultiStop: json['is_multi_stop'] as bool? ?? false,
+      totalStops: json['total_stops'] as int?,
+      currentStopIndex: json['current_stop_index'] as int?,
+      isScheduled: json['is_scheduled'] as bool? ?? false,
+      scheduledPickupTime: json['scheduled_pickup_time'] != null ? 
+          DateTime.parse(json['scheduled_pickup_time'] as String) : null,
       status: json['status'] as String,
       customerRating: json['customer_rating'] as int?,
       driverRating: json['driver_rating'] as int?,
@@ -167,6 +190,11 @@ class Delivery {
       'distance_km': distanceKm,
       'estimated_duration': estimatedDuration,
       'total_price': totalPrice,
+      'is_multi_stop': isMultiStop,
+      'total_stops': totalStops,
+      'current_stop_index': currentStopIndex,
+      'is_scheduled': isScheduled,
+      'scheduled_pickup_time': scheduledPickupTime?.toIso8601String(),
       'status': status,
       'customer_rating': customerRating,
       'driver_rating': driverRating,
@@ -325,6 +353,12 @@ class Delivery {
     double? distanceKm,
     int? estimatedDuration,
     double? totalPrice,
+    bool? isMultiStop,
+    int? totalStops,
+    int? currentStopIndex,
+    List<DeliveryStop>? stops,
+    bool? isScheduled,
+    DateTime? scheduledPickupTime,
     String? status,
     int? customerRating,
     int? driverRating,
@@ -365,6 +399,12 @@ class Delivery {
       distanceKm: distanceKm ?? this.distanceKm,
       estimatedDuration: estimatedDuration ?? this.estimatedDuration,
       totalPrice: totalPrice ?? this.totalPrice,
+      isMultiStop: isMultiStop ?? this.isMultiStop,
+      totalStops: totalStops ?? this.totalStops,
+      currentStopIndex: currentStopIndex ?? this.currentStopIndex,
+      stops: stops ?? this.stops,
+      isScheduled: isScheduled ?? this.isScheduled,
+      scheduledPickupTime: scheduledPickupTime ?? this.scheduledPickupTime,
       status: status ?? this.status,
       customerRating: customerRating ?? this.customerRating,
       driverRating: driverRating ?? this.driverRating,

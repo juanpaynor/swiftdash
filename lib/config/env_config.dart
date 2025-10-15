@@ -34,6 +34,15 @@ class EnvConfig {
     return token;
   }
 
+  /// Mapbox Secret Token for server-side APIs (Optimization, Directions, etc.)
+  static String get mapboxSecretToken {
+    final token = dotenv.env['MAPBOX_SECRET_TOKEN'];
+    if (token == null || token.isEmpty) {
+      throw Exception('MAPBOX_SECRET_TOKEN not found in .env file');
+    }
+    return token;
+  }
+
   /// Supabase URL
   static String get supabaseUrl {
     final url = dotenv.env['SUPABASE_URL'];

@@ -3,13 +3,16 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:go_router/go_router.dart';
 import '../models/vehicle_type.dart';
+import '../models/delivery.dart';
 import '../models/payment_enums.dart';
 import '../models/payment_config.dart';
 import '../models/payment_result.dart';
 import '../services/delivery_service.dart';
 import '../services/directions_service.dart';
 import '../services/payment_service.dart';
+import '../services/multi_stop_service.dart';
 import '../widgets/modern_widgets.dart';
+import '../widgets/schedule_pickup_widget.dart';
 import '../constants/app_theme.dart';
 
 class OrderSummaryScreen extends StatefulWidget {
@@ -29,6 +32,7 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
   bool _isBooking = false;
   double? _distance;
   double? _price;
+  Map<String, dynamic>? _priceBreakdown; // For multi-stop pricing details
   
   // Payment state
   PaymentBy _selectedPaymentBy = PaymentBy.sender;
@@ -46,18 +50,59 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
   final _packageWeightController = TextEditingController();
   final _packageValueController = TextEditingController();
 
-  VehicleType get vehicleType => widget.orderData['vehicleType'] as VehicleType;
-  String get pickupAddress => widget.orderData['pickupAddress'] as String;
-  String get deliveryAddress => widget.orderData['deliveryAddress'] as String;
-  double get pickupLat => widget.orderData['pickupLat'] as double;
-  double get pickupLng => widget.orderData['pickupLng'] as double;
-  double get deliveryLat => widget.orderData['deliveryLat'] as double;
-  double get deliveryLng => widget.orderData['deliveryLng'] as double;
+  // Multi-stop service
+  final _multiStopService = MultiStopService();
+
+  // Extract data from nested structure
+  Map<String, dynamic> get locationData => widget.orderData['locationData'] as Map<String, dynamic>? ?? widget.orderData;
+  Map<String, dynamic>? get contactData => widget.orderData['contactData'] as Map<String, dynamic>?;
+  
+  VehicleType get vehicleType => widget.orderData['selectedVehicleType'] as VehicleType? ?? locationData['vehicleType'] as VehicleType;
+  String get pickupAddress => locationData['pickupAddress'] as String;
+  double get pickupLat => locationData['pickupLat'] as double;
+  double get pickupLng => locationData['pickupLng'] as double;
+  
+  // Multi-stop support
+  bool get isMultiStop => locationData['isMultiStop'] as bool? ?? false;
+  List<Map<String, dynamic>> get stops => 
+      (locationData['stops'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+  
+  // Scheduled delivery support
+  bool get isScheduled => locationData['isScheduled'] as bool? ?? false;
+  DateTime? get scheduledPickupTime => locationData['scheduledPickupTime'] != null
+      ? DateTime.parse(locationData['scheduledPickupTime'] as String)
+      : null;
+  
+  // Single-stop getters (only used when not multi-stop)
+  String get deliveryAddress => locationData['deliveryAddress'] as String? ?? '';
+  double get deliveryLat => locationData['deliveryLat'] as double? ?? 0.0;
+  double get deliveryLng => locationData['deliveryLng'] as double? ?? 0.0;
+  
+  // Contact data getters
+  String get pickupContactName => contactData?['mainContact']?['name'] ?? _pickupContactNameController.text;
+  String get pickupContactPhone => contactData?['mainContact']?['phone'] ?? _pickupContactPhoneController.text;
+  String get mainContactName => contactData?['mainContact']?['name'] ?? _deliveryContactNameController.text;
+  String get mainContactPhone => contactData?['mainContact']?['phone'] ?? _deliveryContactPhoneController.text;
+  List<Map<String, String>>? get stopsContacts => contactData?['stopsContacts'] as List<Map<String, String>>?;
 
   @override
   void initState() {
     super.initState();
+    _prefillContactData();
     _calculatePriceAndDistance();
+  }
+  
+  void _prefillContactData() {
+    // Pre-fill contact fields if data came from contacts screen
+    if (contactData != null) {
+      final mainContact = contactData!['mainContact'] as Map<String, dynamic>?;
+      if (mainContact != null) {
+        _pickupContactNameController.text = mainContact['name'] ?? '';
+        _pickupContactPhoneController.text = mainContact['phone'] ?? '';
+        _deliveryContactNameController.text = mainContact['name'] ?? '';
+        _deliveryContactPhoneController.text = mainContact['phone'] ?? '';
+      }
+    }
   }
 
   @override
@@ -75,6 +120,14 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
   }
 
   Future<void> _calculatePriceAndDistance() async {
+    if (isMultiStop) {
+      await _calculateMultiStopPrice();
+    } else {
+      await _calculateSingleStopPrice();
+    }
+  }
+
+  Future<void> _calculateSingleStopPrice() async {
     try {
       // Try to get quote from server first
       final data = await DeliveryService.getQuote(
@@ -116,6 +169,175 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  Future<void> _calculateMultiStopPrice() async {
+    try {
+      // Prepare dropoff locations for optimization
+      final dropoffLocations = stops.map((stop) => {
+        'lat': stop['latitude'] as double,
+        'lng': stop['longitude'] as double,
+      }).toList();
+
+      // Validate all coordinates before optimization
+      print('🔍 VALIDATING COORDINATES:');
+      print('  Pickup: ($pickupLat, $pickupLng)');
+      for (int i = 0; i < dropoffLocations.length; i++) {
+        final lat = dropoffLocations[i]['lat']!;
+        final lng = dropoffLocations[i]['lng']!;
+        print('  Stop ${i + 1}: ($lat, $lng)');
+        
+        // Check for invalid coordinates
+        if (lat == 0.0 && lng == 0.0) {
+          throw Exception('Stop ${i + 1} has invalid coordinates (0.0, 0.0)');
+        }
+        if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+          throw Exception('Stop ${i + 1} has out-of-range coordinates');
+        }
+      }
+
+      // Optimize route
+      final optimizationResult = await _multiStopService.optimizeRoute(
+        pickupLat: pickupLat,
+        pickupLng: pickupLng,
+        dropoffLocations: dropoffLocations,
+      );
+
+      print('🔍 MAPBOX OPTIMIZATION RESULT:');
+      print('  Success: ${optimizationResult['success']}');
+      print('  Raw distance: ${optimizationResult['distance']}');
+      print('  Raw distance type: ${optimizationResult['distance']?.runtimeType}');
+
+      double distanceKm = 0.0;
+      if (optimizationResult['success'] == true) {
+        // Distance from Mapbox is in meters
+        final rawDistance = optimizationResult['distance'] as num;
+        distanceKm = rawDistance / 1000;
+        
+        print('  Distance in KM (after /1000): $distanceKm');
+        
+        // Sanity check: Manila area deliveries shouldn't exceed 500 km
+        if (distanceKm > 500) {
+          print('⚠️ WARNING: Suspicious distance: $distanceKm km');
+          print('⚠️ This might be a unit conversion error!');
+        }
+      } else {
+        // Fallback: calculate simple sum of distances
+        print('  Using fallback distance calculation...');
+        distanceKm = await _calculateTotalDistanceFallback();
+        print('  Fallback distance: $distanceKm km');
+      }
+
+      // Calculate price with multi-stop charges
+      final priceResult = await _multiStopService.calculateMultiStopPrice(
+        vehicleTypeId: vehicleType.id,
+        distanceKm: distanceKm,
+        numberOfDropoffs: stops.length,
+      );
+
+      print('💰 PRICE CALCULATION RESULT:');
+      print('  Vehicle: ${vehicleType.name}');
+      print('  Distance: $distanceKm km');
+      print('  Number of dropoffs: ${stops.length}');
+      print('  Success: ${priceResult['success']}');
+      print('  Total Price: ${priceResult['totalPrice']}');
+      if (priceResult['breakdown'] != null) {
+        print('  Breakdown:');
+        print('    Base: ${priceResult['breakdown']['base']}');
+        print('    Distance: ${priceResult['breakdown']['distance']}');
+        print('    Additional Stops: ${priceResult['breakdown']['additionalStopsTotal']}');
+      }
+
+      if (priceResult['success'] == true) {
+        setState(() {
+          _distance = distanceKm;
+          _price = priceResult['totalPrice'];
+          _priceBreakdown = priceResult['breakdown'];
+          _isLoading = false;
+        });
+      } else {
+        throw Exception('Price calculation failed');
+      }
+    } catch (e) {
+      print('Multi-stop price calculation error: $e');
+      if (mounted) {
+        String errorMessage = 'Unable to calculate multi-stop delivery price. Please try again.';
+        
+        // Provide more specific error messages
+        if (e.toString().contains('invalid coordinates')) {
+          errorMessage = 'One or more delivery locations are invalid. Please check all addresses.';
+        } else if (e.toString().contains('Mapbox')) {
+          errorMessage = 'Unable to calculate route. Please check your internet connection.';
+        }
+        
+        ModernToast.error(
+          context: context,
+          message: errorMessage,
+        );
+      }
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<double> _calculateTotalDistanceFallback() async {
+    double total = 0.0;
+    
+    print('🔄 FALLBACK DISTANCE CALCULATION:');
+    
+    // Distance from pickup to first stop
+    if (stops.isNotEmpty) {
+      final firstStop = stops.first;
+      final firstStopLat = firstStop['latitude'] as double;
+      final firstStopLng = firstStop['longitude'] as double;
+      
+      // Validate coordinates
+      if (firstStopLat == 0.0 && firstStopLng == 0.0) {
+        print('  ⚠️ First stop has invalid coordinates (0.0, 0.0)!');
+        throw Exception('Invalid coordinates detected in stops');
+      }
+      
+      print('  Pickup ($pickupLat, $pickupLng) → Stop 1 ($firstStopLat, $firstStopLng)');
+      final segment1Distance = await DirectionsService.getDistance(
+        startLat: pickupLat,
+        startLng: pickupLng,
+        endLat: firstStopLat,
+        endLng: firstStopLng,
+      );
+      print('    Distance: $segment1Distance km');
+      total += segment1Distance;
+    }
+    
+    // Distance between stops
+    for (int i = 0; i < stops.length - 1; i++) {
+      final currentStop = stops[i];
+      final nextStop = stops[i + 1];
+      
+      final currentLat = currentStop['latitude'] as double;
+      final currentLng = currentStop['longitude'] as double;
+      final nextLat = nextStop['latitude'] as double;
+      final nextLng = nextStop['longitude'] as double;
+      
+      // Validate coordinates
+      if ((currentLat == 0.0 && currentLng == 0.0) || (nextLat == 0.0 && nextLng == 0.0)) {
+        print('  ⚠️ Stop ${i + 1} or ${i + 2} has invalid coordinates!');
+        throw Exception('Invalid coordinates detected in stops');
+      }
+      
+      print('  Stop ${i + 1} ($currentLat, $currentLng) → Stop ${i + 2} ($nextLat, $nextLng)');
+      final segmentDistance = await DirectionsService.getDistance(
+        startLat: currentLat,
+        startLng: currentLng,
+        endLat: nextLat,
+        endLng: nextLng,
+      );
+      print('    Distance: $segmentDistance km');
+      total += segmentDistance;
+    }
+    
+    print('  ═══════════════════════');
+    print('  TOTAL FALLBACK DISTANCE: $total km');
+    
+    return total;
   }
 
   @override
@@ -180,6 +402,12 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
                     // Delivery Route Summary
                     _buildRouteCard(),
                     const SizedBox(height: 20),
+                    
+                    // Scheduled Pickup Info
+                    if (isScheduled && scheduledPickupTime != null) ...[
+                      SchedulePickupInfo(scheduledTime: scheduledPickupTime!),
+                      const SizedBox(height: 20),
+                    ],
                     
                     // Price Breakdown
                     _buildPriceBreakdownCard(),
@@ -416,50 +644,146 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
                           ),
                         ),
                         const SizedBox(height: 16),
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: AppTheme.errorColor.withOpacity(0.05),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: AppTheme.errorColor.withOpacity(0.2),
-                              width: 1,
+                        
+                        // Single delivery location or multi-stop list
+                        if (!isMultiStop) ...[
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: AppTheme.errorColor.withOpacity(0.05),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: AppTheme.errorColor.withOpacity(0.2),
+                                width: 1,
+                              ),
                             ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.location_on,
-                                    size: 16,
-                                    color: AppTheme.errorColor,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'Delivery Location',
-                                    style: GoogleFonts.inter(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.location_on,
+                                      size: 16,
                                       color: AppTheme.errorColor,
                                     ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                deliveryAddress,
-                                style: GoogleFonts.inter(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w500,
-                                  color: AppTheme.textPrimary,
-                                  height: 1.4,
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      'Delivery Location',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppTheme.errorColor,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                            ],
+                                const SizedBox(height: 8),
+                                Text(
+                                  deliveryAddress,
+                                  style: GoogleFonts.inter(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w500,
+                                    color: AppTheme.textPrimary,
+                                    height: 1.4,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
+                        ] else ...[
+                          // Multi-stop display
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primaryBlue.withOpacity(0.05),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: AppTheme.primaryBlue.withOpacity(0.2),
+                                width: 1,
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.route,
+                                      size: 16,
+                                      color: AppTheme.primaryBlue,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      'Multi-Stop Delivery',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppTheme.primaryBlue,
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: AppTheme.primaryBlue,
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Text(
+                                        '${stops.length} stops',
+                                        style: GoogleFonts.inter(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                ...stops.asMap().entries.map((entry) {
+                                  final index = entry.key;
+                                  final stop = entry.value;
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        CircleAvatar(
+                                          radius: 14,
+                                          backgroundColor: AppTheme.primaryBlue,
+                                          child: Text(
+                                            '${index + 1}',
+                                            style: GoogleFonts.inter(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Text(
+                                            stop['address'] as String,
+                                            style: GoogleFonts.inter(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w500,
+                                              color: AppTheme.textPrimary,
+                                              height: 1.4,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }).toList(),
+                              ],
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -493,11 +817,6 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
       );
     }
 
-    // Calculate breakdown
-    final subtotal = vehicleType.calculatePriceBeforeVAT(_distance!);
-    final vat = vehicleType.calculateVAT(_distance!);
-    final distanceFee = subtotal - vehicleType.basePrice;
-
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -524,9 +843,22 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
           ),
           const SizedBox(height: 16),
           
-          _buildPriceRow('Base Fee', '₱${vehicleType.basePrice.toStringAsFixed(2)}'),
-          _buildPriceRow('Distance Fee (${_distance!.toStringAsFixed(1)} km)', '₱${distanceFee.toStringAsFixed(2)}'),
-          _buildPriceRow('VAT (12%)', '₱${vat.toStringAsFixed(2)}'),
+          // Multi-stop or single-stop pricing
+          if (isMultiStop && _priceBreakdown != null) ...[
+            _buildPriceRow('Base Fee', '₱${_priceBreakdown!['base'].toStringAsFixed(2)}'),
+            _buildPriceRow(
+              'Distance Fee (${_priceBreakdown!['distanceKm'].toStringAsFixed(1)} km × ₱${_priceBreakdown!['pricePerKm'].toStringAsFixed(0)})',
+              '₱${_priceBreakdown!['distance'].toStringAsFixed(2)}',
+            ),
+            if (_priceBreakdown!['additionalStops'] > 0)
+              _buildPriceRow(
+                'Additional Stops (${_priceBreakdown!['additionalStops']} × ₱${_priceBreakdown!['additionalStopCharge'].toStringAsFixed(0)})',
+                '₱${_priceBreakdown!['additionalStopsTotal'].toStringAsFixed(2)}',
+                highlight: true,
+              ),
+            _buildPriceRow('VAT (12%)', '₱${(_price! * 0.12 / 1.12).toStringAsFixed(2)}'),
+          ] else
+            ..._buildSingleStopPricing(),
           
           const Divider(height: 24),
           
@@ -556,25 +888,41 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
     );
   }
 
-  Widget _buildPriceRow(String label, String amount) {
+  List<Widget> _buildSingleStopPricing() {
+    final subtotal = vehicleType.calculatePriceBeforeVAT(_distance!);
+    final vat = vehicleType.calculateVAT(_distance!);
+    final distanceFee = subtotal - vehicleType.basePrice;
+    
+    return [
+      _buildPriceRow('Base Fee', '₱${vehicleType.basePrice.toStringAsFixed(2)}'),
+      _buildPriceRow('Distance Fee (${_distance!.toStringAsFixed(1)} km)', '₱${distanceFee.toStringAsFixed(2)}'),
+      _buildPriceRow('VAT (12%)', '₱${vat.toStringAsFixed(2)}'),
+    ];
+  }
+
+  Widget _buildPriceRow(String label, String amount, {bool highlight = false}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            label,
-            style: GoogleFonts.inter(
-              fontSize: 14,
-              color: AppTheme.textSecondary,
+          Expanded(
+            child: Text(
+              label,
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                color: highlight ? AppTheme.primaryBlue : AppTheme.textSecondary,
+                fontWeight: highlight ? FontWeight.w600 : FontWeight.normal,
+              ),
             ),
           ),
+          const SizedBox(width: 8),
           Text(
             amount,
             style: GoogleFonts.inter(
               fontSize: 14,
               fontWeight: FontWeight.w600,
-              color: AppTheme.textPrimary,
+              color: highlight ? AppTheme.primaryBlue : AppTheme.textPrimary,
             ),
           ),
         ],
@@ -1430,54 +1778,115 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
 
   Future<void> _createDeliveryWithPayment(PaymentResult paymentResult) async {
     try {
-      // Create delivery using existing service but with payment data
-      final delivery = await DeliveryService.bookDeliveryViaFunction(
-        vehicleTypeId: vehicleType.id,
-        pickupAddress: pickupAddress,
-        pickupLat: pickupLat,
-        pickupLng: pickupLng,
-        pickupContactName: _pickupContactNameController.text,
-        pickupContactPhone: _pickupContactPhoneController.text,
-        pickupInstructions: _pickupInstructionsController.text.isNotEmpty
-            ? _pickupInstructionsController.text
-            : null,
-        dropoffAddress: deliveryAddress,
-        dropoffLat: deliveryLat,
-        dropoffLng: deliveryLng,
-        dropoffContactName: _deliveryContactNameController.text,
-        dropoffContactPhone: _deliveryContactPhoneController.text,
-        dropoffInstructions: _deliveryInstructionsController.text.isNotEmpty
-            ? _deliveryInstructionsController.text
-            : null,
-        packageDescription: _packageDescriptionController.text,
-        packageWeightKg: double.tryParse(_packageWeightController.text),
-        packageValue: double.tryParse(_packageValueController.text),
-        // Payment information
-        paymentBy: _selectedPaymentBy.name,
-        paymentMethod: _selectedPaymentMethod.name,
-        paymentStatus: paymentResult.status.name,
-        mayaCheckoutId: paymentResult.checkoutId,
-        mayaPaymentId: paymentResult.paymentId,
-        paymentReference: paymentResult.paymentId ?? paymentResult.checkoutId,
-        paymentMetadata: paymentResult.transactionData,
-      );
-
-      // Update delivery with payment information (this would need to be added to DeliveryService)
-      // For now, we'll proceed to matching screen
+      late Delivery delivery;
+      
+      // Get contact names/phones from either contactData or text controllers
+      final pickupName = contactData?['mainContact']?['name'] ?? _pickupContactNameController.text;
+      final pickupPhone = contactData?['mainContact']?['phone'] ?? _pickupContactPhoneController.text;
+      
+      // Use different methods for single-stop vs multi-stop deliveries
+      if (isMultiStop && stops.isNotEmpty) {
+        // Build dropoff stops with contact info
+        final List<Map<String, dynamic>> enrichedStops = [];
+        for (int i = 0; i < stops.length; i++) {
+          final stop = Map<String, dynamic>.from(stops[i]);
+          
+          // Add contact info from contactData
+          if (contactData != null) {
+            final stopsContactsList = contactData!['stopsContacts'] as List?;
+            if (stopsContactsList != null && i < stopsContactsList.length) {
+              final contactInfo = stopsContactsList[i] as Map<String, dynamic>;
+              stop['contactName'] = contactInfo['name'];
+              stop['contactPhone'] = contactInfo['phone'];
+            }
+          }
+          
+          enrichedStops.add(stop);
+        }
+        
+        // Multi-stop delivery
+        delivery = await DeliveryService.createMultiStopDelivery(
+          vehicleTypeId: vehicleType.id,
+          pickupAddress: pickupAddress,
+          pickupLat: pickupLat,
+          pickupLng: pickupLng,
+          pickupContactName: pickupName,
+          pickupContactPhone: pickupPhone,
+          pickupInstructions: _pickupInstructionsController.text.isNotEmpty
+              ? _pickupInstructionsController.text
+              : null,
+          dropoffStops: enrichedStops,
+          packageDescription: _packageDescriptionController.text,
+          packageWeightKg: double.tryParse(_packageWeightController.text),
+          packageValue: double.tryParse(_packageValueController.text),
+          totalPrice: _price ?? 0.0,
+          // Scheduling
+          isScheduled: isScheduled,
+          scheduledPickupTime: scheduledPickupTime,
+          // Payment information
+          paymentBy: _selectedPaymentBy.name,
+          paymentMethod: _selectedPaymentMethod.name,
+          paymentStatus: paymentResult.status.name,
+          mayaCheckoutId: paymentResult.checkoutId,
+          mayaPaymentId: paymentResult.paymentId,
+          paymentReference: paymentResult.paymentId ?? paymentResult.checkoutId,
+          paymentMetadata: paymentResult.transactionData,
+        );
+      } else {
+        // Get delivery contact from contactData or text controller
+        final deliveryName = contactData?['mainContact']?['name'] ?? _deliveryContactNameController.text;
+        final deliveryPhone = contactData?['mainContact']?['phone'] ?? _deliveryContactPhoneController.text;
+        
+        // Single-stop delivery - use existing function
+        delivery = await DeliveryService.bookDeliveryViaFunction(
+          vehicleTypeId: vehicleType.id,
+          pickupAddress: pickupAddress,
+          pickupLat: pickupLat,
+          pickupLng: pickupLng,
+          pickupContactName: pickupName,
+          pickupContactPhone: pickupPhone,
+          pickupInstructions: _pickupInstructionsController.text.isNotEmpty
+              ? _pickupInstructionsController.text
+              : null,
+          dropoffAddress: deliveryAddress,
+          dropoffLat: deliveryLat,
+          dropoffLng: deliveryLng,
+          dropoffContactName: deliveryName,
+          dropoffContactPhone: deliveryPhone,
+          dropoffInstructions: _deliveryInstructionsController.text.isNotEmpty
+              ? _deliveryInstructionsController.text
+              : null,
+          packageDescription: _packageDescriptionController.text,
+          packageWeightKg: double.tryParse(_packageWeightController.text),
+          packageValue: double.tryParse(_packageValueController.text),
+          // Payment information
+          paymentBy: _selectedPaymentBy.name,
+          paymentMethod: _selectedPaymentMethod.name,
+          paymentStatus: paymentResult.status.name,
+          mayaCheckoutId: paymentResult.checkoutId,
+          mayaPaymentId: paymentResult.paymentId,
+          paymentReference: paymentResult.paymentId ?? paymentResult.checkoutId,
+          paymentMetadata: paymentResult.transactionData,
+        );
+      }
       
       if (mounted) {
         HapticFeedback.heavyImpact();
         
         // Show success message based on payment type
+        final message = isMultiStop 
+            ? 'Multi-stop delivery booked! Finding driver...'
+            : 'Delivery booked! Finding driver...';
+            
         if (paymentResult.isSuccess && _selectedPaymentMethod.isDigital) {
           ModernToast.success(
             context: context,
-            message: 'Payment successful! Finding driver...',
+            message: 'Payment successful! $message',
           );
         } else if (_selectedPaymentMethod == PaymentMethod.cash) {
           ModernToast.success(
             context: context,
-            message: 'Delivery booked! Finding driver...',
+            message: message,
           );
         }
         

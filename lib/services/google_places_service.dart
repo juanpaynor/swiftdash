@@ -18,6 +18,11 @@ class GooglePlacesService {
   static const int _cacheMaxSize = 100;
   static const Duration _cacheExpiry = Duration(hours: 24);
   static final Map<String, DateTime> _cacheTimestamps = {};
+  
+  // Session token for billing optimization - reuse per search session
+  static String? _currentSessionToken;
+  static DateTime? _sessionTokenCreatedAt;
+  static const Duration _sessionTokenExpiry = Duration(minutes: 3); // Google recommends 3 minutes
 
   /// Get autocomplete suggestions using Google Places Autocomplete API
   /// Cost: $2.83 per 1000 requests
@@ -129,19 +134,23 @@ class GooglePlacesService {
   /// Get detailed place information using Google Place Details API
   /// Cost: $17 per 1000 requests (only called when user selects a place)
   static Future<GooglePlaceDetails?> getPlaceDetails(String placeId) async {
+    print('🔍 GooglePlacesService.getPlaceDetails called');
+    print('  Place ID: $placeId');
+    
     // Check cache first
     if (_detailsCache.containsKey(placeId)) {
       final timestamp = _cacheTimestamps[placeId];
       if (timestamp != null && DateTime.now().difference(timestamp) < _cacheExpiry) {
-        print('GooglePlacesService: Returning cached place details for $placeId');
+        print('  ✅ Returning cached place details for $placeId');
         return _detailsCache[placeId];
       } else {
+        print('  🗑️ Cache expired, removing old entry');
         _detailsCache.remove(placeId);
         _cacheTimestamps.remove(placeId);
       }
     }
     
-    print('GooglePlacesService: Getting place details for $placeId using Google Place Details API');
+    print('  📡 Calling Google Place Details API...');
     
     try {
       // Google Place Details API with comprehensive field selection
@@ -152,20 +161,46 @@ class GooglePlacesService {
           '&language=en'
           '&sessiontoken=${_generateSessionToken()}';  // Session token for billing optimization
       
+      print('  🌐 Request URL: $url');
+      
       final response = await http.get(Uri.parse(url));
       
-      print('GooglePlacesService: Place Details API response: ${response.statusCode}');
+      print('  📥 Place Details API response: ${response.statusCode}');
+      print('  📄 Response body: ${response.body.substring(0, response.body.length > 500 ? 500 : response.body.length)}...');
       
       if (response.statusCode != 200) {
-        print('GooglePlacesService: Place Details API error: ${response.statusCode}');
+        print('  ❌ Place Details API HTTP error: ${response.statusCode}');
         return null;
       }
       
       final data = json.decode(response.body);
+      final status = data['status'] as String?;
+      
+      print('  📊 API Status: $status');
+      
+      // Check for API errors
+      if (status != 'OK') {
+        print('  ❌ API returned non-OK status: $status');
+        if (data['error_message'] != null) {
+          print('  ❌ Error Message: ${data['error_message']}');
+        }
+        
+        // Log common error types
+        if (status == 'REQUEST_DENIED') {
+          print('  ❌ REQUEST_DENIED - Check API key and permissions');
+        } else if (status == 'OVER_QUERY_LIMIT') {
+          print('  ❌ OVER_QUERY_LIMIT - API quota exceeded');
+        } else if (status == 'INVALID_REQUEST') {
+          print('  ❌ INVALID_REQUEST - Check place_id or parameters');
+        }
+        
+        return null;
+      }
+      
       final result = data['result'] as Map<String, dynamic>?;
       
       if (result == null) {
-        print('GooglePlacesService: No place details found');
+        print('  ❌ No place details found in response');
         return null;
       }
       
@@ -175,8 +210,10 @@ class GooglePlacesService {
       final lat = location?['lat'] as double?;
       final lng = location?['lng'] as double?;
       
+      print('  📍 Coordinates from API: ($lat, $lng)');
+      
       if (lat == null || lng == null) {
-        print('GooglePlacesService: No coordinates found in place details');
+        print('  ❌ No coordinates found in place details');
         return null;
       }
       
@@ -229,11 +266,16 @@ class GooglePlacesService {
       _detailsCache[placeId] = placeDetails;
       _cacheTimestamps[placeId] = DateTime.now();
       
-      print('GooglePlacesService: Place details retrieved and cached');
+      print('  ✅ Place details retrieved and cached');
+      print('  📍 Final coordinates: (${placeDetails.latitude}, ${placeDetails.longitude})');
+      print('  🏠 Address: ${placeDetails.formattedAddress}');
+      
       return placeDetails;
       
     } catch (e) {
-      print('GooglePlacesService: Place details error: $e');
+      print('  ❌ GooglePlacesService: Place details error: $e');
+      print('  ❌ Exception type: ${e.runtimeType}');
+      print('  ❌ Stack trace: ${StackTrace.current}');
       return null;
     }
   }
@@ -283,13 +325,30 @@ class GooglePlacesService {
     print('=== END TEST ===');
   }
 
-  /// Generate session token for billing optimization
+  /// Generate/reuse session token for billing optimization
+  /// Google recommends reusing the same token for autocomplete + place details within a session
   static String _generateSessionToken() {
+    // Check if current token is still valid
+    if (_currentSessionToken != null && _sessionTokenCreatedAt != null) {
+      final age = DateTime.now().difference(_sessionTokenCreatedAt!);
+      if (age < _sessionTokenExpiry) {
+        print('  ♻️ Reusing existing session token (age: ${age.inSeconds}s)');
+        return _currentSessionToken!;
+      } else {
+        print('  ⏰ Session token expired, generating new one');
+      }
+    }
+    
+    // Generate new token
     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     final random = math.Random();
-    return String.fromCharCodes(Iterable.generate(
+    _currentSessionToken = String.fromCharCodes(Iterable.generate(
       36, (_) => chars.codeUnitAt(random.nextInt(chars.length))
     ));
+    _sessionTokenCreatedAt = DateTime.now();
+    
+    print('  🆕 Generated new session token: $_currentSessionToken');
+    return _currentSessionToken!;
   }
 
   /// Clean and normalize search query for better results (less restrictive)

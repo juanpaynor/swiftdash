@@ -20,6 +20,13 @@ class MainActivity : FlutterActivity(), MethodCallHandler {
     private var pendingResult: Result? = null
     private var isInitialized = false
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        // Suppress ImageReader_JNI warnings from Mapbox
+        System.setProperty("android.media.image.maxImages", "10")
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         

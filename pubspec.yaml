@@ -81,8 +81,9 @@ dependencies:
   
   # Network & Performance
   dio: ^5.7.0
-  http: ^1.1.0
+  http: ^1.2.0
   flutter_cache_manager: ^3.4.1
+  webview_flutter: ^4.5.0
   connectivity_plus: ^6.0.5
   
   # Push Notifications

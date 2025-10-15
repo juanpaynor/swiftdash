@@ -887,8 +887,9 @@ class _MatchingScreenState extends State<MatchingScreen>
           const Divider(color: AppTheme.dividerColor),
           const SizedBox(height: AppTheme.spacing16),
           
-          // Price breakdown (matching order summary screen)
+          // Price breakdown (multi-stop aware)
           if (_delivery!.distanceKm != null) ...[
+            // Base Fee
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -910,6 +911,8 @@ class _MatchingScreenState extends State<MatchingScreen>
               ],
             ),
             const SizedBox(height: 8),
+            
+            // Distance Fee
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -931,26 +934,32 @@ class _MatchingScreenState extends State<MatchingScreen>
               ],
             ),
             const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'VAT (12%)',
-                  style: GoogleFonts.inter(
-                    fontSize: 14,
-                    color: AppTheme.textSecondary,
+            
+            // Additional Stops (only for multi-stop deliveries)
+            if (_delivery!.isMultiStop && _delivery!.totalStops != null && _delivery!.totalStops! > 1 && _vehicleType != null) ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Additional Stops (${_delivery!.totalStops! - 1})',
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      color: AppTheme.textSecondary,
+                    ),
                   ),
-                ),
-                Text(
-                  '₱${(_vehicleType != null ? _vehicleType!.calculateVAT(_delivery!.distanceKm!) : 0).toStringAsFixed(2)}',
-                  style: GoogleFonts.inter(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.textPrimary,
+                  Text(
+                    '₱${((_delivery!.totalStops! - 1) * (_vehicleType!.additionalStopCharge ?? 0.0)).toStringAsFixed(2)}',
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textPrimary,
+                    ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
+            
             const SizedBox(height: 12),
             Container(
               height: 1,

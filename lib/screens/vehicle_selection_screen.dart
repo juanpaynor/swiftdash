@@ -101,7 +101,7 @@ class _VehicleSelectionScreenState extends State<VehicleSelectionScreen>
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_rounded),
-          onPressed: () => context.pop(),
+          onPressed: () => context.go('/home'),
         ),
         title: Text(
           'Choose Vehicle',
