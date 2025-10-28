@@ -240,6 +240,10 @@ class _ScheduledDeliveriesScreenState extends State<ScheduledDeliveriesScreen> {
         title: const Text('Scheduled Deliveries'),
         backgroundColor: AppTheme.primaryBlue,
         foregroundColor: Colors.white,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => context.go('/location-selection'),
+        ),
       ),
       body: Column(
         children: [
@@ -365,7 +369,7 @@ class _ScheduledDeliveriesScreenState extends State<ScheduledDeliveriesScreen> {
           ),
           const SizedBox(height: 24),
           ElevatedButton.icon(
-            onPressed: () => context.go('/home'),
+            onPressed: () => context.go('/location-selection'),
             icon: const Icon(Icons.add),
             label: const Text('Schedule a Delivery'),
             style: ElevatedButton.styleFrom(

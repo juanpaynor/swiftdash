@@ -22,11 +22,17 @@ class DeliveryContactsScreen extends StatefulWidget {
 class _DeliveryContactsScreenState extends State<DeliveryContactsScreen> {
   final _formKey = GlobalKey<FormState>();
   
-  // Main delivery contact
-  final _mainContactNameController = TextEditingController();
-  final _mainContactPhoneController = TextEditingController();
+  // Pickup contact
+  final _pickupContactNameController = TextEditingController();
+  final _pickupContactPhoneController = TextEditingController();
+  final _pickupInstructionsController = TextEditingController();
   
-  // Additional stops contacts
+  // Main delivery contact
+  final _deliveryContactNameController = TextEditingController();
+  final _deliveryContactPhoneController = TextEditingController();
+  final _deliveryInstructionsController = TextEditingController();
+  
+  // Additional stops contacts (for multi-stop)
   final List<Map<String, TextEditingController>> _stopControllers = [];
   
   bool get _isMultiStop => widget.locationData['isMultiStop'] == true;
@@ -47,10 +53,14 @@ class _DeliveryContactsScreenState extends State<DeliveryContactsScreen> {
 
   @override
   void dispose() {
-    _mainContactNameController.dispose();
-    _mainContactPhoneController.dispose();
+    _pickupContactNameController.dispose();
+    _pickupContactPhoneController.dispose();
+    _pickupInstructionsController.dispose();
+    _deliveryContactNameController.dispose();
+    _deliveryContactPhoneController.dispose();
+    _deliveryInstructionsController.dispose();
     
-    for (var controllers in _stopControllers) {
+    for (final controllers in _stopControllers) {
       controllers['name']?.dispose();
       controllers['phone']?.dispose();
     }
@@ -73,22 +83,28 @@ class _DeliveryContactsScreenState extends State<DeliveryContactsScreen> {
 
     // Build contact data
     final Map<String, dynamic> contactData = {
-      'mainContact': {
-        'name': _mainContactNameController.text.trim(),
-        'phone': _mainContactPhoneController.text.trim(),
+      'pickupContact': {
+        'name': _pickupContactNameController.text.trim(),
+        'phone': _pickupContactPhoneController.text.trim(),
+        'instructions': _pickupInstructionsController.text.trim(),
+      },
+      'deliveryContact': {
+        'name': _deliveryContactNameController.text.trim(),
+        'phone': _deliveryContactPhoneController.text.trim(),
+        'instructions': _deliveryInstructionsController.text.trim(),
       },
     };
 
     // Add additional stops contacts if multi-stop
     if (_isMultiStop) {
-      final List<Map<String, String>> stopsContacts = [];
+      final List<Map<String, String>> additionalStops = [];
       for (int i = 0; i < _stopControllers.length; i++) {
-        stopsContacts.add({
+        additionalStops.add({
           'name': _stopControllers[i]['name']!.text.trim(),
           'phone': _stopControllers[i]['phone']!.text.trim(),
         });
       }
-      contactData['stopsContacts'] = stopsContacts;
+      contactData['additional_stops'] = additionalStops;
     }
 
     // Navigate to order summary with all data
@@ -135,7 +151,7 @@ class _DeliveryContactsScreenState extends State<DeliveryContactsScreen> {
                   children: [
                     // Header
                     Text(
-                      'Who will receive the delivery?',
+                      'Contact Information',
                       style: GoogleFonts.inter(
                         fontSize: 20,
                         fontWeight: FontWeight.w700,
@@ -146,7 +162,7 @@ class _DeliveryContactsScreenState extends State<DeliveryContactsScreen> {
                     const SizedBox(height: 8),
                     
                     Text(
-                      'Enter contact information for each delivery stop',
+                      'Enter pickup and delivery contact information',
                       style: GoogleFonts.inter(
                         fontSize: 14,
                         color: AppTheme.textSecondary,
@@ -155,14 +171,13 @@ class _DeliveryContactsScreenState extends State<DeliveryContactsScreen> {
                     
                     const SizedBox(height: 32),
                     
-                    // Main Delivery Contact
-                    _buildContactSection(
-                      title: _isMultiStop ? 'Stop 1 - Main Delivery' : 'Delivery Contact',
-                      address: widget.locationData['deliveryAddress'] ?? '',
-                      nameController: _mainContactNameController,
-                      phoneController: _mainContactPhoneController,
-                      isFirst: true,
-                    ),
+                    // Pickup Contact Section
+                    _buildPickupContactSection(),
+                    
+                    const SizedBox(height: 24),
+                    
+                    // Delivery Contact Section  
+                    _buildDeliveryContactSection(),
                     
                     // Additional Stops
                     if (_isMultiStop) ...[
@@ -222,6 +237,378 @@ class _DeliveryContactsScreenState extends State<DeliveryContactsScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildPickupContactSection() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.orange.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.orange.withOpacity(0.2),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Title with icon
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: const BoxDecoration(
+                  color: Colors.orange,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.upload_outlined,
+                  color: Colors.white,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Pickup Contact',
+                      style: GoogleFonts.inter(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      widget.locationData['pickupAddress'] ?? '',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: AppTheme.textSecondary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          
+          const SizedBox(height: 20),
+          
+          // Contact Name
+          Text(
+            'Contact Name',
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _pickupContactNameController,
+            textCapitalization: TextCapitalization.words,
+            decoration: InputDecoration(
+              hintText: 'Enter pickup contact name',
+              prefixIcon: const Icon(Icons.person_outline),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.orange, width: 2),
+              ),
+              filled: true,
+              fillColor: Colors.white,
+            ),
+            validator: (value) {
+              if (value == null || value.trim().isEmpty) {
+                return 'Please enter pickup contact name';
+              }
+              if (value.trim().length < 2) {
+                return 'Name must be at least 2 characters';
+              }
+              return null;
+            },
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Contact Phone
+          Text(
+            'Contact Phone',
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _pickupContactPhoneController,
+            keyboardType: TextInputType.phone,
+            decoration: InputDecoration(
+              hintText: '09XX XXX XXXX',
+              prefixIcon: const Icon(Icons.phone_outlined),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.orange, width: 2),
+              ),
+              filled: true,
+              fillColor: Colors.white,
+            ),
+            validator: (value) {
+              if (value == null || value.trim().isEmpty) {
+                return 'Please enter pickup contact phone';
+              }
+              // Basic Philippine phone number validation
+              final phoneRegex = RegExp(r'^(09|\+639)\d{9}$');
+              if (!phoneRegex.hasMatch(value.replaceAll(' ', '').replaceAll('-', ''))) {
+                return 'Invalid phone number format';
+              }
+              return null;
+            },
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Pickup Instructions (Optional)
+          Text(
+            'Pickup Instructions (Optional)',
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _pickupInstructionsController,
+            maxLines: 3,
+            decoration: InputDecoration(
+              hintText: 'e.g., Ring bell twice, Gate code: 1234, etc.',
+              prefixIcon: const Icon(Icons.notes_outlined),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.orange, width: 2),
+              ),
+              filled: true,
+              fillColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDeliveryContactSection() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppTheme.primaryBlue.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: AppTheme.primaryBlue.withOpacity(0.2),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Title with icon
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryBlue,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.download_outlined,
+                  color: Colors.white,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Delivery Contact',
+                      style: GoogleFonts.inter(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      widget.locationData['deliveryAddress'] ?? '',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: AppTheme.textSecondary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          
+          const SizedBox(height: 20),
+          
+          // Recipient Name
+          Text(
+            'Recipient Name',
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _deliveryContactNameController,
+            textCapitalization: TextCapitalization.words,
+            decoration: InputDecoration(
+              hintText: 'Enter recipient name',
+              prefixIcon: const Icon(Icons.person_outline),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: AppTheme.primaryBlue, width: 2),
+              ),
+              filled: true,
+              fillColor: Colors.white,
+            ),
+            validator: (value) {
+              if (value == null || value.trim().isEmpty) {
+                return 'Please enter recipient name';
+              }
+              if (value.trim().length < 2) {
+                return 'Name must be at least 2 characters';
+              }
+              return null;
+            },
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Recipient Phone
+          Text(
+            'Recipient Phone',
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _deliveryContactPhoneController,
+            keyboardType: TextInputType.phone,
+            decoration: InputDecoration(
+              hintText: '09XX XXX XXXX',
+              prefixIcon: const Icon(Icons.phone_outlined),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: AppTheme.primaryBlue, width: 2),
+              ),
+              filled: true,
+              fillColor: Colors.white,
+            ),
+            validator: (value) {
+              if (value == null || value.trim().isEmpty) {
+                return 'Please enter recipient phone number';
+              }
+              // Basic Philippine phone number validation
+              final phoneRegex = RegExp(r'^(09|\+639)\d{9}$');
+              if (!phoneRegex.hasMatch(value.replaceAll(' ', '').replaceAll('-', ''))) {
+                return 'Invalid phone number format';
+              }
+              return null;
+            },
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Delivery Instructions (Optional)
+          Text(
+            'Delivery Instructions (Optional)',
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _deliveryInstructionsController,
+            maxLines: 3,
+            decoration: InputDecoration(
+              hintText: 'e.g., Leave at door, Call on arrival, etc.',
+              prefixIcon: const Icon(Icons.notes_outlined),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: Colors.grey[300]!),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: AppTheme.primaryBlue, width: 2),
+              ),
+              filled: true,
+              fillColor: Colors.white,
+            ),
+          ),
+        ],
       ),
     );
   }

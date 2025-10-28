@@ -5,10 +5,85 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
 import '../constants/app_theme.dart';
+import '../models/delivery.dart';
 import 'modern_widgets.dart';
 
-class AppDrawer extends StatelessWidget {
+class AppDrawer extends StatefulWidget {
   const AppDrawer({super.key});
+
+  @override
+  State<AppDrawer> createState() => _AppDrawerState();
+}
+
+class _AppDrawerState extends State<AppDrawer> {
+  String? _activeDeliveryId;
+  String? _activeDeliveryStatus;
+  bool _isLoadingActiveDelivery = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkForActiveDelivery();
+  }
+
+  Future<void> _checkForActiveDelivery() async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) {
+        setState(() => _isLoadingActiveDelivery = false);
+        return;
+      }
+
+      // Check for active delivery (any status except completed, cancelled, or failed)
+      final response = await Supabase.instance.client
+          .from('deliveries')
+          .select('id, status')
+          .eq('customer_id', user.id)
+          .not('status', 'in', '(completed,cancelled,failed)')
+          .order('created_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      if (response != null && mounted) {
+        setState(() {
+          _activeDeliveryId = response['id'] as String;
+          _activeDeliveryStatus = response['status'] as String;
+          _isLoadingActiveDelivery = false;
+        });
+      } else if (mounted) {
+        setState(() => _isLoadingActiveDelivery = false);
+      }
+    } catch (e) {
+      debugPrint('Error checking for active delivery: $e');
+      if (mounted) {
+        setState(() => _isLoadingActiveDelivery = false);
+      }
+    }
+  }
+
+  String _getStatusText(String status) {
+    switch (status) {
+      case 'pending':
+      case 'finding_driver':
+        return 'Finding driver...';
+      case 'driver_offered':
+        return 'Driver found!';
+      case 'driver_assigned':
+        return 'Driver assigned';
+      case 'driver_en_route':
+        return 'Driver on the way';
+      case 'arrived_at_pickup':
+        return 'Driver arrived';
+      case 'picked_up':
+        return 'Package picked up';
+      case 'in_transit':
+        return 'In transit';
+      case 'arrived_at_dropoff':
+        return 'Arriving soon';
+      default:
+        return 'In progress';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -40,14 +115,67 @@ class AppDrawer extends StatelessWidget {
                   physics: const BouncingScrollPhysics(),
                   padding: const EdgeInsets.symmetric(horizontal: AppTheme.spacing16),
                   children: [
+                    // ACTIVE DELIVERY (if exists) - Prominent at top
+                    if (!_isLoadingActiveDelivery && _activeDeliveryId != null) ...[
+                      _buildActiveDeliveryCard(context)
+                        .animate()
+                        .shimmer(duration: 1500.milliseconds, color: AppTheme.primaryBlue.withOpacity(0.2))
+                        .fadeIn(duration: 300.milliseconds),
+                      
+                      const SizedBox(height: AppTheme.spacing16),
+                      
+                      // Divider
+                      Container(
+                        height: 1,
+                        margin: const EdgeInsets.symmetric(vertical: AppTheme.spacing8),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              AppTheme.dividerColor.withOpacity(0.0),
+                              AppTheme.dividerColor,
+                              AppTheme.dividerColor.withOpacity(0.0),
+                            ],
+                          ),
+                        ),
+                      ),
+                      
+                      const SizedBox(height: AppTheme.spacing8),
+                    ],
+                    
                     _buildMenuItem(
                       context,
-                      icon: Icons.person_outline_rounded,
-                      title: 'View Profile',
-                      subtitle: 'View and edit your profile',
+                      icon: Icons.history_rounded,
+                      title: 'Order History',
+                      subtitle: 'View your past deliveries',
                       onTap: () {
                         Navigator.pop(context);
-                        context.go('/profile-edit');
+                        context.go('/order-history');
+                      },
+                    ).animate(delay: 50.milliseconds).slideX(begin: -0.2).fadeIn(),
+                    
+                    const SizedBox(height: AppTheme.spacing8),
+                    
+                    _buildMenuItem(
+                      context,
+                      icon: Icons.local_shipping_rounded,
+                      title: 'Track Order',
+                      subtitle: 'Track your active deliveries',
+                      onTap: () {
+                        Navigator.pop(context);
+                        context.go('/order-history'); // Go to order history with Active tab
+                      },
+                    ).animate(delay: 75.milliseconds).slideX(begin: -0.2).fadeIn(),
+                    
+                    const SizedBox(height: AppTheme.spacing8),
+                    
+                    _buildMenuItem(
+                      context,
+                      icon: Icons.schedule_rounded,
+                      title: 'Scheduled Orders',
+                      subtitle: 'View your scheduled deliveries',
+                      onTap: () {
+                        Navigator.pop(context);
+                        context.go('/scheduled-deliveries');
                       },
                     ).animate(delay: 100.milliseconds).slideX(begin: -0.2).fadeIn(),
                     
@@ -55,12 +183,28 @@ class AppDrawer extends StatelessWidget {
                     
                     _buildMenuItem(
                       context,
-                      icon: Icons.settings_outlined,
-                      title: 'Account Settings',
-                      subtitle: 'Manage your account preferences',
+                      icon: Icons.location_on_outlined,
+                      title: 'My Addresses',
+                      subtitle: 'Manage saved addresses',
                       onTap: () {
                         Navigator.pop(context);
-                        _showAccountSettings(context);
+                        context.go('/saved-addresses');
+                      },
+                    ).animate(delay: 125.milliseconds).slideX(begin: -0.2).fadeIn(),
+                    
+                    const SizedBox(height: AppTheme.spacing8),
+                    
+                    _buildMenuItem(
+                      context,
+                      icon: Icons.report_problem_outlined,
+                      title: 'Report an Issue',
+                      subtitle: 'Report a problem with a delivery',
+                      onTap: () {
+                        Navigator.pop(context);
+                        ModernToast.info(
+                          context: context,
+                          message: 'Issue reporting coming soon!',
+                        );
                       },
                     ).animate(delay: 150.milliseconds).slideX(begin: -0.2).fadeIn(),
                     
@@ -79,7 +223,48 @@ class AppDrawer extends StatelessWidget {
                           ],
                         ),
                       ),
-                    ).animate(delay: 200.milliseconds).scaleX(),
+                    ).animate(delay: 175.milliseconds).scaleX(),
+                    
+                    _buildMenuItem(
+                      context,
+                      icon: Icons.person_outline_rounded,
+                      title: 'View Profile',
+                      subtitle: 'View and edit your profile',
+                      onTap: () {
+                        Navigator.pop(context);
+                        context.go('/profile-edit');
+                      },
+                    ).animate(delay: 200.milliseconds).slideX(begin: -0.2).fadeIn(),
+                    
+                    const SizedBox(height: AppTheme.spacing8),
+                    
+                    _buildMenuItem(
+                      context,
+                      icon: Icons.settings_outlined,
+                      title: 'Account Settings',
+                      subtitle: 'Manage your account preferences',
+                      onTap: () {
+                        Navigator.pop(context);
+                        _showAccountSettings(context);
+                      },
+                    ).animate(delay: 225.milliseconds).slideX(begin: -0.2).fadeIn(),
+                    
+                    const SizedBox(height: AppTheme.spacing20),
+                    
+                    // Divider
+                    Container(
+                      height: 1,
+                      margin: const EdgeInsets.symmetric(vertical: AppTheme.spacing16),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            AppTheme.dividerColor.withOpacity(0.0),
+                            AppTheme.dividerColor,
+                            AppTheme.dividerColor.withOpacity(0.0),
+                          ],
+                        ),
+                      ),
+                    ).animate(delay: 250.milliseconds).scaleX(),
                     
                     _buildMenuItem(
                       context,
@@ -88,7 +273,7 @@ class AppDrawer extends StatelessWidget {
                       subtitle: 'Sign out of your account',
                       isDestructive: true,
                       onTap: () => _showSignOutConfirmation(context),
-                    ).animate(delay: 250.milliseconds).slideX(begin: -0.2).fadeIn(),
+                    ).animate(delay: 275.milliseconds).slideX(begin: -0.2).fadeIn(),
                   ],
                 ),
               ),
@@ -99,6 +284,131 @@ class AppDrawer extends StatelessWidget {
                 .fadeIn()
                 .slideY(begin: 0.2),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActiveDeliveryCard(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            AppTheme.primaryBlue,
+            AppTheme.primaryBlue.withOpacity(0.8),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(AppTheme.radius16),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.primaryBlue.withOpacity(0.4),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            HapticFeedback.mediumImpact();
+            Navigator.pop(context);
+            context.go('/tracking/$_activeDeliveryId');
+          },
+          borderRadius: BorderRadius.circular(AppTheme.radius16),
+          child: Padding(
+            padding: const EdgeInsets.all(AppTheme.spacing20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(
+                        Icons.local_shipping_rounded,
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: AppTheme.spacing12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Active Delivery',
+                            style: GoogleFonts.inter(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _getStatusText(_activeDeliveryStatus!),
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.white.withOpacity(0.9),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(
+                        Icons.arrow_forward_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppTheme.spacing12),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppTheme.spacing12,
+                    vertical: AppTheme.spacing8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(AppTheme.radius12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.track_changes_rounded,
+                        color: Colors.white,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Tap to track delivery',
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -358,19 +668,19 @@ class AppDrawer extends StatelessWidget {
             ),
             ElevatedButton(
               onPressed: () async {
-                Navigator.of(context).pop();
-                Navigator.of(context).pop(); // Close drawer
-                
                 HapticFeedback.mediumImpact();
+                
+                // Close dialog first
+                Navigator.of(context).pop();
+                
+                // Close drawer (go back from drawer)
+                Navigator.of(context).pop();
                 
                 try {
                   await Supabase.instance.client.auth.signOut();
                   if (context.mounted) {
+                    // Navigate to login
                     context.go('/');
-                    ModernToast.success(
-                      context: context,
-                      message: 'Signed out successfully',
-                    );
                   }
                 } catch (e) {
                   if (context.mounted) {

@@ -2,12 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:swiftdash/models/vehicle_type.dart';
-import 'package:swiftdash/screens/home_screen.dart';
 import 'package:swiftdash/screens/login_screen.dart';
 import 'package:swiftdash/screens/signup_screen.dart';
 import 'package:swiftdash/screens/tracking_screen.dart';
 import 'package:swiftdash/screens/addresses_screen.dart';
-import 'package:swiftdash/screens/vehicle_selection_screen.dart';
 import 'package:swiftdash/screens/location_selection_screen.dart';
 import 'package:swiftdash/screens/delivery_contacts_screen.dart';
 import 'package:swiftdash/screens/order_summary_screen.dart';
@@ -15,6 +13,10 @@ import 'package:swiftdash/screens/matching_screen.dart';
 import 'package:swiftdash/screens/profile_edit_screen.dart';
 import 'package:swiftdash/screens/saved_addresses_screen.dart';
 import 'package:swiftdash/screens/scheduled_deliveries_screen.dart';
+import 'package:swiftdash/screens/order_history_screen.dart';
+import 'package:swiftdash/screens/delivery_completion_screen.dart';
+import 'package:swiftdash/screens/delivery_receipt_screen.dart';
+import 'package:swiftdash/models/delivery.dart';
 
 final GoRouter router = GoRouter(
   initialLocation: '/',
@@ -27,9 +29,9 @@ final GoRouter router = GoRouter(
       return '/';
     }
     
-    // If authenticated and on login/signup, redirect to home
+    // If authenticated and on login/signup, redirect to location selection (new home)
     if (isAuthenticated && isLoggingIn) {
-      return '/home';
+      return '/location-selection';
     }
     
     return null;
@@ -49,15 +51,21 @@ final GoRouter router = GoRouter(
     ),
     GoRoute(
       path: '/home',
-      builder: (BuildContext context, GoRouterState state) {
-        return const HomeScreen();
+      redirect: (context, state) {
+        // Redirect old home screen to new location selection screen
+        return '/location-selection';
       },
     ),
     GoRoute(
       path: '/tracking',
       redirect: (context, state) {
-        // General tracking route should redirect to home since it needs a deliveryId
-        return '/home';
+        // Handle legacy tracking links - try to extract deliveryId from query params
+        final deliveryId = state.uri.queryParameters['id'] ?? state.uri.queryParameters['deliveryId'];
+        if (deliveryId != null && deliveryId.isNotEmpty) {
+          return '/tracking/$deliveryId';
+        }
+        // No deliveryId provided, redirect to location selection
+        return '/location-selection';
       },
     ),
     GoRoute(
@@ -75,14 +83,15 @@ final GoRouter router = GoRouter(
     ),
     GoRoute(
       path: '/create-delivery',
-      builder: (BuildContext context, GoRouterState state) {
-        return const VehicleSelectionScreen();
+      redirect: (context, state) {
+        // Redirect old vehicle selection screen to new location selection screen
+        return '/location-selection';
       },
     ),
     GoRoute(
       path: '/location-selection',
       builder: (BuildContext context, GoRouterState state) {
-        final vehicleType = state.extra as VehicleType;
+        final vehicleType = state.extra as VehicleType?;
         return LocationSelectionScreen(selectedVehicleType: vehicleType);
       },
     ),
@@ -117,6 +126,18 @@ final GoRouter router = GoRouter(
       },
     ),
     GoRoute(
+      path: '/profile-edit',
+      builder: (BuildContext context, GoRouterState state) {
+        return const ProfileEditScreen();
+      },
+    ),
+    GoRoute(
+      path: '/active-deliveries',
+      builder: (BuildContext context, GoRouterState state) {
+        return const OrderHistoryScreen(); // Show all orders with Active tab
+      },
+    ),
+    GoRoute(
       path: '/saved-addresses',
       builder: (BuildContext context, GoRouterState state) {
         return const SavedAddressesScreen();
@@ -126,6 +147,26 @@ final GoRouter router = GoRouter(
       path: '/scheduled-deliveries',
       builder: (BuildContext context, GoRouterState state) {
         return const ScheduledDeliveriesScreen();
+      },
+    ),
+    GoRoute(
+      path: '/order-history',
+      builder: (BuildContext context, GoRouterState state) {
+        return const OrderHistoryScreen();
+      },
+    ),
+    GoRoute(
+      path: '/completion',
+      builder: (BuildContext context, GoRouterState state) {
+        final delivery = state.extra as Delivery;
+        return DeliveryCompletionScreen(delivery: delivery);
+      },
+    ),
+    GoRoute(
+      path: '/receipt',
+      builder: (BuildContext context, GoRouterState state) {
+        final delivery = state.extra as Delivery;
+        return DeliveryReceiptScreen(delivery: delivery);
       },
     ),
   ],

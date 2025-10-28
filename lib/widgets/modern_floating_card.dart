@@ -34,24 +34,23 @@ class ModernFloatingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: ModernColors.cardBackground,
         borderRadius: BorderRadius.circular(20),
         boxShadow: ModernShadows.large,
       ),
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             _buildETASection(),
             if (driverName != null) ...[
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
               _buildDriverSection(),
             ],
             if (additionalContent != null) ...[
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
               additionalContent!,
             ],
           ],

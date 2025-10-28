@@ -72,7 +72,7 @@ class _AddressesScreenState extends State<AddressesScreen> {
           try {
             context.pop();
           } catch (e) {
-            context.go('/home');
+            context.go('/location-selection');
           }
         },
       ),

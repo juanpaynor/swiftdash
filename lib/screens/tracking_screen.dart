@@ -1,29 +1,35 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../services/realtime_service.dart';
+import '../services/customer_ably_realtime_service.dart';
 import '../services/delivery_service.dart';
 import '../services/multi_stop_service.dart';
+import '../services/mapbox_matrix_service.dart';
+import '../services/ably_service.dart';
+import '../services/chat_service.dart';
 import '../models/delivery.dart';
 import '../models/delivery_stop.dart';
+import '../models/chat_message.dart';
 import '../widgets/shared_delivery_map.dart';
-import '../widgets/vertical_progress_stepper.dart';
-import '../widgets/modern_floating_card.dart';
+import '../widgets/draggable_tracking_sheet.dart';
+import '../widgets/animated_status_banner.dart';
 import '../widgets/modern_top_navigation.dart';
 import '../constants/modern_colors.dart';
 import '../utils/back_button_handler.dart';
+import '../config/env.dart';
 
 /// Uber-style tracking screen with full-screen map and floating overlay cards
 /// 
-/// 🔧 IMPLEMENTS EXACT WEBSOCKET BROADCAST SPECIFICATIONS:
-/// 1. Supabase Realtime Channels: _supabase.channel('driver-location-{deliveryId}')
-/// 2. Broadcasting: channel.sendBroadcastMessage() - NO database writes, zero latency
-/// 3. Listening: channel.onBroadcast() - instant callbacks, direct map updates
-/// 4. Channel Management: granular channels, auto cleanup, no memory leaks
+/// 🔧 IMPLEMENTS ABLY REALTIME SPECIFICATIONS:
+/// 1. Ably Channels: tracking:{deliveryId}
+/// 2. Publishing: channel.publish('location_update', payload)
+/// 3. Listening: channel.subscribe('location_update') - instant callbacks
+/// 4. Presence: Driver online/offline status via presence API
 /// 
-/// Driver app broadcasts GPS via: channel.sendBroadcastMessage('location_update', payload)
-/// Customer app listens via: channel.onBroadcast(event: 'location_update', callback: updateMap)
+/// Driver app publishes GPS via: ablyService.publishLocation(deliveryId, location)
+/// Customer app listens via: ablyService.subscribeToDelivery(deliveryId)
 class TrackingScreen extends StatefulWidget {
   final String deliveryId;
 
@@ -37,12 +43,18 @@ class TrackingScreen extends StatefulWidget {
 }
 
 class _TrackingScreenState extends State<TrackingScreen> {
-  final CustomerRealtimeService _realtimeService = CustomerRealtimeService();
+  final CustomerAblyRealtimeService _realtimeService = CustomerAblyRealtimeService();
   final MultiStopService _multiStopService = MultiStopService();
+  final AblyService _ablyService = AblyService();
   
   late StreamSubscription _locationSubscription;
-  late StreamSubscription _deliverySubscription;
   late StreamSubscription _driverSubscription;
+  
+  // Supabase Realtime channel for delivery status updates
+  RealtimeChannel? _deliveryChannel;
+  
+  // Chat service
+  ChatService? _chatService;
   
   Delivery? _delivery;
   List<DeliveryStop> _stops = [];
@@ -50,6 +62,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
   Map<String, dynamic>? _driverProfile;
   bool _isLoading = true;
   String? _error;
+  String _driverStatus = 'unknown';
+  bool _isDriverOnline = false;
+  DateTime? _lastLocationUpdate;
 
   @override
   void initState() {
@@ -102,6 +117,14 @@ class _TrackingScreenState extends State<TrackingScreen> {
 
       // Subscribe to real-time updates
       await _subscribeToUpdates();
+
+      // Fetch traffic-aware route if driver is assigned
+      if (delivery.status == 'driver_assigned' || 
+          delivery.status == 'going_to_pickup' ||
+          delivery.status == 'package_collected' ||
+          delivery.status == 'in_transit') {
+        _fetchTrafficAwareRoute();
+      }
       
     } catch (e) {
       setState(() {
@@ -111,91 +134,172 @@ class _TrackingScreenState extends State<TrackingScreen> {
     }
   }
 
+  Future<void> _initializeChatService() async {
+    try {
+      debugPrint('💬 TrackingScreen: Initializing chat service...');
+      
+      // Get current user info
+      final currentUser = Supabase.instance.client.auth.currentUser;
+      if (currentUser == null) {
+        debugPrint('⚠️ TrackingScreen: No authenticated user, skipping chat initialization');
+        return;
+      }
+
+      // Get user profile for display name
+      final userProfile = await Supabase.instance.client
+          .from('user_profiles')
+          .select('first_name, last_name')
+          .eq('id', currentUser.id)
+          .single();
+      
+      final customerName = '${userProfile['first_name']} ${userProfile['last_name']}';
+      
+      // Get Ably client from the service
+      final ablyClient = _ablyService.realtimeClient;
+      if (ablyClient == null) {
+        debugPrint('⚠️ TrackingScreen: Ably client not initialized, skipping chat');
+        return;
+      }
+
+      // Create ChatService instance
+      _chatService = ChatService(
+        ablyClient: ablyClient,
+        currentUserId: currentUser.id,
+        currentUserType: SenderType.customer,
+        currentUserName: customerName,
+      );
+
+      // Initialize chat for this delivery
+      await _chatService!.initializeChat(widget.deliveryId);
+      
+      debugPrint('✅ TrackingScreen: Chat service initialized successfully');
+      
+      // Trigger UI update to show chat tab
+      setState(() {});
+    } catch (e, stackTrace) {
+      debugPrint('❌ TrackingScreen: Failed to initialize chat: $e');
+      debugPrint('Stack trace: $stackTrace');
+      // Don't fail the whole screen if chat fails
+    }
+  }
+
   Future<void> _subscribeToUpdates() async {
     if (_delivery == null) return;
 
     try {
-      debugPrint('🔧 TrackingScreen: Setting up subscriptions for delivery: ${widget.deliveryId}');
+      debugPrint('� TrackingScreen: Setting up Ably subscriptions for delivery: ${widget.deliveryId}');
       
-      // Subscribe to driver location broadcasts
-      await _realtimeService.subscribeToDriverLocation(widget.deliveryId);
-      debugPrint('🔧 TrackingScreen: Location subscription setup complete');
+      // Subscribe to delivery tracking channel
+      // 🔥 CRITICAL FIX: Initialize CustomerAblyRealtimeService before subscribing
+      await _realtimeService.initialize(Env.ablyClientKey);
+      debugPrint('✅ TrackingScreen: CustomerAblyRealtimeService initialized');
+      
+      await _realtimeService.subscribeToDelivery(widget.deliveryId);
+      debugPrint('✅ TrackingScreen: Ably subscription setup complete');
+      
+      // Initialize chat service
+      await _initializeChatService();
+      
+      // Subscribe to Supabase Realtime for delivery status updates
+      debugPrint('🔧 TrackingScreen: Setting up Supabase realtime for delivery status');
+      
+      _deliveryChannel = Supabase.instance.client
+          .channel('delivery:${widget.deliveryId}')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'deliveries',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'id',
+              value: widget.deliveryId,
+            ),
+            callback: (payload) {
+              debugPrint('🔥 Supabase: Delivery status update received');
+              debugPrint('📦 Payload: $payload');
+              
+              final deliveryData = payload.newRecord;
+              debugPrint('📋 New status: ${deliveryData['status']}');
+              _updateDeliveryStatus(deliveryData);
+            },
+          )
+          .subscribe();
+      
+      debugPrint('✅ TrackingScreen: Supabase realtime subscription active');
       
       // Start a timer to detect if no location updates are received
       Timer(const Duration(seconds: 30), () {
         if (mounted && _driverLocation == null && _delivery?.status == 'driver_assigned') {
           debugPrint('⚠️ No driver location updates received after 30 seconds');
-          debugPrint('⚠️ This suggests the driver app is not broadcasting location');
+          debugPrint('⚠️ This suggests the driver app is not publishing to Ably');
         }
       });
       
-      _locationSubscription = _realtimeService.driverLocationUpdates.listen(
-        (location) {
-          debugPrint('🎯 TrackingScreen: Location update received from stream');
-          debugPrint('🎯 Expected deliveryId: ${widget.deliveryId}');
-          debugPrint('🎯 Received deliveryId: ${location['deliveryId']}');
-          debugPrint('🎯 Mounted: $mounted');
-          debugPrint('🎯 Location data: $location');
-          
-          if (mounted && location['deliveryId'] == widget.deliveryId) {
-            debugPrint('✅ TrackingScreen: Processing location update');
+      // Listen to location updates
+      _locationSubscription = _realtimeService.locationStream.listen(
+        (locationData) {
+          if (mounted) {
+            debugPrint('📍 Ably: Location update received: ${locationData['latitude']}, ${locationData['longitude']}');
+            
+            // Convert Ably format to our internal format
+            final location = {
+              'deliveryId': locationData['delivery_id'],
+              'latitude': locationData['latitude'],
+              'longitude': locationData['longitude'],
+              'timestamp': locationData['timestamp'],
+              'bearing': locationData['bearing'],
+              'speed': locationData['speed'],
+              'accuracy': locationData['accuracy'],
+              'batteryLevel': locationData['battery_level'],
+            };
+            
             _updateDriverLocation(location);
-          } else {
-            debugPrint('⏭️ TrackingScreen: Skipping location update (wrong delivery or unmounted)');
           }
         },
         onError: (error) {
-          debugPrint('❌ Location subscription error: $error');
+          debugPrint('❌ Ably location subscription error: $error');
         },
       );
       
-      // Log subscription activity every 10 seconds to monitor WebSocket
+      // Listen to driver status (presence)
+      _driverSubscription = _realtimeService.driverStatusStream.listen(
+        (status) {
+          if (mounted) {
+            setState(() {
+              _driverStatus = status;
+            });
+            debugPrint('� Ably: Driver status: $status');
+          }
+        },
+        onError: (error) {
+          debugPrint('❌ Ably driver status error: $error');
+        },
+      );
+      
+      // Check if driver is online
+      final isOnline = await _realtimeService.isDriverOnline();
+      if (mounted) {
+        setState(() {
+          _driverStatus = isOnline ? 'online' : 'offline';
+        });
+        debugPrint('👋 Ably: Initial driver status: $_driverStatus');
+      }
+      
+      // Log subscription activity every 10 seconds
       Timer.periodic(const Duration(seconds: 10), (timer) {
         if (!mounted) {
           timer.cancel();
           return;
         }
         
-        debugPrint('📊 WebSocket Status Check:');
-        debugPrint('   - Subscribed to: driver-location-${widget.deliveryId}');
+        debugPrint('📊 Ably Status Check:');
+        debugPrint('   - Channel: tracking:${widget.deliveryId}');
         debugPrint('   - Driver location received: ${_driverLocation != null ? 'YES' : 'NO'}');
+        debugPrint('   - Driver status: $_driverStatus');
         debugPrint('   - Delivery status: ${_delivery?.status}');
-        debugPrint('   - Expected driver: ${_delivery?.driverId}');
-        
-        if (_driverLocation == null && (_delivery?.status == 'driver_assigned' || _delivery?.status == 'going_to_pickup')) {
-          debugPrint('⚠️ No driver location updates - check if driver app is broadcasting');
-        }
       });
-
-      // Subscribe to delivery status updates
-      await _realtimeService.subscribeToDelivery(widget.deliveryId);
-      _deliverySubscription = _realtimeService.deliveryUpdates.listen(
-        (delivery) {
-          if (mounted && delivery['id'] == widget.deliveryId) {
-            _updateDeliveryStatus(delivery);
-          }
-        },
-        onError: (error) {
-          debugPrint('Delivery subscription error: $error');
-        },
-      );
-
-      // Subscribe to driver status if we have a driver assigned
-      if (_delivery!.driverId != null) {
-        await _realtimeService.subscribeToDriverStatus(_delivery!.driverId!);
-        _driverSubscription = _realtimeService.driverStatusUpdates.listen(
-          (driverData) {
-            if (mounted && driverData['driver_id'] == _delivery!.driverId) {
-              _updateDriverStatus(driverData);
-            }
-          },
-          onError: (error) {
-            debugPrint('Driver subscription error: $error');
-          },
-        );
-      }
     } catch (e) {
-      debugPrint('Failed to subscribe to updates: $e');
+      debugPrint('Failed to subscribe to Ably updates: $e');
     }
   }
 
@@ -219,6 +323,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
           .eq('id', driverId)
           .single();
       
+      debugPrint('📊 Driver profile response: $response');
+      debugPrint('🖼️ Profile picture URL: ${response['profile_picture_url']}');
+      
       // Also get user profile for driver name
       final userResponse = await Supabase.instance.client
           .from('user_profiles')
@@ -236,37 +343,46 @@ class _TrackingScreenState extends State<TrackingScreen> {
       });
       
       debugPrint('✅ Driver profile loaded: ${_driverProfile?['full_name']}');
-    } catch (e) {
+      debugPrint('✅ Profile picture in state: ${_driverProfile?['profile_picture_url']}');
+    } catch (e, stackTrace) {
       debugPrint('❌ Failed to fetch driver profile: $e');
+      debugPrint('❌ Stack trace: $stackTrace');
       // Don't set error state, just continue without driver profile
     }
   }
 
   void _updateDriverLocation(Map<String, dynamic> location) {
-    debugPrint('🚗 TrackingScreen: _updateDriverLocation called');
-    debugPrint('🚗 Raw location data: $location');
-    debugPrint('🚗 Location keys: ${location.keys.toList()}');
-    debugPrint('🚗 Location values: ${location.values.toList()}');
+    final now = DateTime.now();
+    final timeSinceLastUpdate = _lastLocationUpdate != null 
+        ? now.difference(_lastLocationUpdate!).inMilliseconds 
+        : 0;
     
-    // Log current state before update
-    debugPrint('🚗 Previous _driverLocation: $_driverLocation');
-    debugPrint('🚗 Current delivery status: ${_delivery?.status}');
-    debugPrint('🚗 Widget mounted: $mounted');
+    debugPrint('🚗 TrackingScreen: _updateDriverLocation called (${timeSinceLastUpdate}ms since last update)');
     
     setState(() {
       _driverLocation = location;
+      _lastLocationUpdate = now;
+      _isDriverOnline = _driverStatus == 'online';
     });
 
     final lat = location['latitude']?.toDouble();
     final lng = location['longitude']?.toDouble();
+    final timestamp = location['timestamp'];
+    final speed = location['speed'];
     
-    debugPrint('🚗 Parsed coordinates: lat=$lat, lng=$lng');
+    debugPrint('🚗 Location update: lat=$lat, lng=$lng, speed=${speed}km/h, timestamp=$timestamp');
     
     if (lat != null && lng != null) {
       debugPrint('✅ Driver location updated successfully');
       debugPrint('🗺️ Map will receive driverLatitude: $lat, driverLongitude: $lng');
       debugPrint('🗺️ Delivery coordinates - pickup: (${_delivery?.pickupLatitude}, ${_delivery?.pickupLongitude})');
       debugPrint('🗺️ Delivery coordinates - delivery: (${_delivery?.deliveryLatitude}, ${_delivery?.deliveryLongitude})');
+      
+      // Recalculate ETA based on current driver position
+      _recalculateETA(lat, lng);
+      
+      // Update client-side ETA if we have a traffic route
+      _updateClientSideETA(lat, lng);
       
       // Force a rebuild to ensure map gets updated coordinates
       debugPrint('🔄 Triggering UI rebuild for map update...');
@@ -287,19 +403,48 @@ class _TrackingScreenState extends State<TrackingScreen> {
 
   void _updateDeliveryStatus(Map<String, dynamic> deliveryData) {
     final previousStatus = _delivery?.status;
+    final newStatus = deliveryData['status'];
+    
+    debugPrint('📊 STATUS UPDATE:');
+    debugPrint('   Previous: "$previousStatus"');
+    debugPrint('   New: "$newStatus"');
+    debugPrint('   Stage mapping: ${_getDeliveryStage(newStatus)}');
     
     setState(() {
       if (_delivery != null) {
         _delivery = _delivery!.copyWith(
-          status: deliveryData['status'],
+          status: newStatus,
           updatedAt: DateTime.tryParse(deliveryData['updated_at'] ?? ''),
         );
       }
     });
 
     // Show status update notification if status changed
-    if (previousStatus != null && previousStatus != deliveryData['status']) {
-      _showStatusUpdateNotification(deliveryData['status']);
+    if (previousStatus != null && previousStatus != newStatus) {
+      _showStatusUpdateNotification(newStatus);
+
+      // Navigate to completion screen when delivered
+      if (newStatus == 'delivered' && _delivery != null) {
+        debugPrint('🎉 Delivery completed - navigating to completion screen');
+        Future.delayed(const Duration(milliseconds: 1500), () {
+          if (mounted) {
+            Navigator.of(context).pushReplacementNamed(
+              '/completion',
+              arguments: _delivery,
+            );
+          }
+        });
+        return; // Don't fetch route for completed delivery
+      }
+
+      // Fetch new traffic route when status changes to key states
+      if (newStatus == 'driver_assigned' || 
+          newStatus == 'going_to_pickup' ||
+          newStatus == 'package_collected' ||
+          newStatus == 'in_transit') {
+        debugPrint('🔄 Status changed to $newStatus - fetching new traffic route');
+        _fetchTrafficAwareRoute();
+      }
     }
   }
 
@@ -383,13 +528,10 @@ class _TrackingScreenState extends State<TrackingScreen> {
 
   void _cleanup() {
     _locationSubscription.cancel();
-    _deliverySubscription.cancel();
     _driverSubscription.cancel();
-    _realtimeService.unsubscribeFromDriverLocation(widget.deliveryId);
-    _realtimeService.unsubscribeFromDelivery(widget.deliveryId);
-    if (_delivery?.driverId != null) {
-      _realtimeService.unsubscribeFromDriverStatus(_delivery!.driverId!);
-    }
+    _deliveryChannel?.unsubscribe(); // Properly unsubscribe from Supabase channel
+    _realtimeService.unsubscribe();
+    _chatService?.dispose(); // Clean up chat service
   }
 
   Future<void> _callDriver() async {
@@ -438,7 +580,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
               ),
               const SizedBox(height: 16),
               ElevatedButton(
-                onPressed: () => context.go('/home'),
+                onPressed: () => context.go('/location-selection'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: ModernColors.primaryBlue,
                 ),
@@ -464,10 +606,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
             // Modern top navigation bar
             _buildModernTopNavigation(),
             
-            // Vertical progress stepper (left side)
-            if (_delivery != null) _buildVerticalProgressStepper(),
-            
-            // Modern floating focus card (bottom)
+            // Modern floating focus card (bottom) - now with animated status banner
             if (_delivery != null) _buildModernFloatingCard(),
           ],
         ),
@@ -482,6 +621,10 @@ class _TrackingScreenState extends State<TrackingScreen> {
     debugPrint('   - driverLongitude: ${_driverLocation?['longitude']?.toDouble()}');
     debugPrint('   - deliveryStatus: ${_delivery?.status}');
     debugPrint('   - driverVehicleType: ${_driverProfile?['vehicle_types']?['name']}');
+    debugPrint('   - driverProfilePictureUrl: ${_driverProfile?['profile_picture_url']}');
+    debugPrint('   - driverId: ${_delivery?.driverId}');
+    debugPrint('   - isMultiStop: ${_delivery?.isMultiStop}');
+    debugPrint('   - stopsCount: ${_stops.length}');
     
     return SizedBox(
       width: double.infinity,
@@ -502,8 +645,36 @@ class _TrackingScreenState extends State<TrackingScreen> {
         onRouteCalculated: _onRouteCalculated,
         // Driver vehicle type for map icons
         driverVehicleType: _driverProfile?['vehicle_types']?['name'],
+        // Driver profile picture for personalized marker
+        driverProfilePictureUrl: _driverProfile?['profile_picture_url'],
+        driverId: _delivery?.driverId,
+        // Multi-stop delivery support
+        isMultiStop: _delivery?.isMultiStop ?? false,
+        additionalStops: _delivery?.isMultiStop == true ? _getAdditionalStopsForMap() : null,
+        // Traffic-aware route segments for polyline rendering
+        trafficSegments: _currentTrafficRoute?.segments.map((segment) => {
+          'coordinates': segment.coordinates,
+          'congestion': segment.congestion.name,
+          'distance': segment.distance,
+          'duration': segment.duration,
+        }).toList(),
       ),
     );
+  }
+
+  // Convert DeliveryStop list to Map format for SharedDeliveryMap
+  List<Map<String, dynamic>> _getAdditionalStopsForMap() {
+    if (_stops.isEmpty) return [];
+    
+    return _stops.map((stop) => {
+      'latitude': stop.latitude,
+      'longitude': stop.longitude,
+      'address': stop.address,
+      'stopNumber': stop.stopNumber,
+      'status': stop.status,
+      'recipientName': stop.recipientName,
+      'recipientPhone': stop.recipientPhone,
+    }).toList();
   }
 
 
@@ -511,6 +682,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
   // Route calculation results
   double? _routeDistanceKm;
   double? _estimatedMinutes;
+
+  // Traffic-aware routing (Matrix API)
+  TrafficAwareRoute? _currentTrafficRoute;
+  String? _clientSideETA;
+  DateTime? _lastMatrixApiCall;
 
   void _onRouteCalculated(double distanceKm, double estimatedMinutes) {
     setState(() {
@@ -594,40 +770,53 @@ class _TrackingScreenState extends State<TrackingScreen> {
   Widget _buildModernTopNavigation() {
     return ModernTopNavigationBar(
       orderNumber: widget.deliveryId,
-      onBackPressed: () => context.go('/home'),
+      onBackPressed: () => context.go('/location-selection'),
       onHelpPressed: () => _showHelpDialog(),
     );
   }
 
-  Widget _buildVerticalProgressStepper() {
-    final currentStage = DeliveryStage.fromStatus(_delivery?.status);
-    return Positioned(
-      left: 24,
-      top: 140,
-      child: VerticalProgressStepper(
-        currentStage: currentStage,
-      ),
-    );
+  DeliveryStage _getDeliveryStage(String? status) {
+    debugPrint('🎯 Mapping status to stage: "$status"');
+    switch (status?.toLowerCase()) {
+      case 'confirmed':
+      case 'pending':
+        return DeliveryStage.orderConfirmed;
+      case 'accepted':
+      case 'driver_assigned':
+        return DeliveryStage.driverAssigned;
+      case 'picking_up':
+      case 'going_to_pickup':
+        return DeliveryStage.goingToPickup;
+      case 'arrived':
+      case 'at_pickup':
+        return DeliveryStage.atPickup;
+      case 'picked_up':
+      case 'package_collected':
+        return DeliveryStage.packageCollected;
+      case 'in_transit':
+      case 'on_the_way':
+      case 'delivering':
+        return DeliveryStage.onTheWay;
+      case 'delivered':
+      case 'completed':
+        return DeliveryStage.delivered;
+      default:
+        debugPrint('⚠️ Unknown status: "$status" - defaulting to orderConfirmed');
+        return DeliveryStage.orderConfirmed;
+    }
   }
 
   Widget _buildModernFloatingCard() {
-    return Positioned(
-      left: 0,
-      right: 0,
-      bottom: 0,
-      child: ModernFloatingCard(
-        eta: _getEstimatedTime(),
-        arrivalTime: _calculateArrivalTime(),
-        driverName: _driverProfile?['full_name'],
-        driverRating: _driverProfile?['rating']?.toDouble(),
-        vehicleInfo: _getVehicleInfo(),
-        plateNumber: _driverProfile?['plate_number'],
-        driverPhotoUrl: _driverProfile?['profile_picture_url'],
-        onCallDriver: _callDriver,
-        onMessageDriver: _messageDriver,
-        deliveryStatus: _delivery?.status,
-        additionalContent: _buildAdditionalCardContent(),
-      ),
+    return DraggableTrackingSheet(
+      delivery: _delivery!,
+      isDriverOnline: _isDriverOnline,
+      batteryLevel: _driverLocation?['battery_level'] as int?,
+      lastUpdate: _lastLocationUpdate,
+      estimatedArrival: _calculateArrivalTime(),
+      driverProfile: _driverProfile,
+      onCancel: _cancelDelivery,
+      currentStage: _getDeliveryStage(_delivery?.status),
+      chatService: _chatService,
     );
   }
 
@@ -1086,6 +1275,155 @@ class _TrackingScreenState extends State<TrackingScreen> {
     return 'Calculating...';
   }
 
+  void _recalculateETA(double driverLat, double driverLng) {
+    if (_delivery == null) return;
+
+    double targetLat;
+    double targetLng;
+    bool isToPickup;
+
+    // Determine destination based on delivery status
+    final status = _delivery!.status;
+    if (status == 'driver_assigned' || status == 'going_to_pickup') {
+      // Driver is heading to pickup location
+      targetLat = _delivery!.pickupLatitude;
+      targetLng = _delivery!.pickupLongitude;
+      isToPickup = true;
+    } else if (status == 'picked_up' || status == 'in_transit') {
+      // Driver is heading to delivery location
+      targetLat = _delivery!.deliveryLatitude;
+      targetLng = _delivery!.deliveryLongitude;
+      isToPickup = false;
+    } else {
+      // No need to calculate ETA for other statuses
+      return;
+    }
+
+    // Calculate straight-line distance (Haversine formula)
+    const double earthRadiusKm = 6371;
+    final dLat = _degreesToRadians(targetLat - driverLat);
+    final dLng = _degreesToRadians(targetLng - driverLng);
+    
+    final a = (sin(dLat / 2) * sin(dLat / 2)) +
+        cos(_degreesToRadians(driverLat)) *
+            cos(_degreesToRadians(targetLat)) *
+            sin(dLng / 2) *
+            sin(dLng / 2);
+    
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    final distanceKm = earthRadiusKm * c;
+
+    // Apply road factor (straight line vs actual road distance)
+    // Roads typically add 20-40% to straight-line distance
+    final roadDistanceKm = distanceKm * 1.3;
+
+    // Calculate estimated time
+    const double citySpeed = 25.0; // km/h average city speed
+    const double pickupTime = 3.0; // minutes for pickup
+    const double deliveryTime = 2.0; // minutes for delivery
+    
+    final travelTimeMinutes = (roadDistanceKm / citySpeed) * 60;
+    final processTime = isToPickup ? pickupTime : deliveryTime;
+    final totalMinutes = travelTimeMinutes + processTime;
+
+    setState(() {
+      _estimatedMinutes = totalMinutes;
+      _routeDistanceKm = roadDistanceKm;
+    });
+
+    debugPrint('⏱️ ETA Recalculated: ${totalMinutes.toStringAsFixed(1)} min (${roadDistanceKm.toStringAsFixed(2)} km)');
+  }
+
+  double _degreesToRadians(double degrees) {
+    return degrees * pi / 180;
+  }
+
+  Future<void> _cancelDelivery() async {
+    try {
+      // Show loading dialog
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: Card(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('Cancelling delivery...'),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // Call the delivery service to cancel
+      await DeliveryService.cancelDelivery(widget.deliveryId);
+
+      if (!mounted) return;
+      
+      // Close loading dialog
+      Navigator.of(context).pop();
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.white),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Delivery cancelled successfully',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: Color(0xFF10B981),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 3),
+        ),
+      );
+
+      // Navigate back to location selection after a short delay
+      await Future.delayed(const Duration(seconds: 1));
+      if (!mounted) return;
+      context.go('/location-selection');
+    } catch (e) {
+      if (!mounted) return;
+      
+      // Close loading dialog if open
+      Navigator.of(context).pop();
+
+      // Show error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.error, color: Colors.white),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Failed to cancel delivery: ${e.toString()}',
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFFEF4444),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
   void _showHelpDialog() {
     showDialog(
       context: context,
@@ -1138,5 +1476,106 @@ class _TrackingScreenState extends State<TrackingScreen> {
         ],
       ),
     );
+  }
+
+  // ==================== MATRIX API TRAFFIC-AWARE ROUTING ====================
+
+  /// Fetch traffic-aware route using Matrix API
+  /// Call #2: Driver assignment - multi-leg route (driver → pickup → delivery)
+  /// Call #3: Pickup complete - direct route (driver → delivery)
+  Future<void> _fetchTrafficAwareRoute() async {
+    if (_delivery == null || _driverLocation == null) return;
+
+    final driverLat = _driverLocation!['latitude']?.toDouble();
+    final driverLng = _driverLocation!['longitude']?.toDouble();
+
+    if (driverLat == null || driverLng == null) return;
+
+    // Determine waypoints based on delivery status
+    final List<List<double>> coordinates;
+    
+    final status = _delivery!.status;
+    if (status == 'driver_assigned' || status == 'going_to_pickup') {
+      // Call #2: Multi-leg route (driver → pickup → delivery)
+      coordinates = [
+        [driverLng, driverLat],
+        [_delivery!.pickupLongitude, _delivery!.pickupLatitude],
+        [_delivery!.deliveryLongitude, _delivery!.deliveryLatitude],
+      ];
+      debugPrint('🚦 Fetching Matrix API route (Call #2): driver → pickup → delivery');
+    } else if (status == 'package_collected' || status == 'in_transit') {
+      // Call #3: Direct route (driver → delivery)
+      coordinates = [
+        [driverLng, driverLat],
+        [_delivery!.deliveryLongitude, _delivery!.deliveryLatitude],
+      ];
+      debugPrint('🚦 Fetching Matrix API route (Call #3): driver → delivery');
+    } else {
+      // No route needed for other statuses
+      return;
+    }
+
+    try {
+      final route = await MapboxMatrixService.getTrafficAwareRoute(coordinates);
+
+      if (route != null && mounted) {
+        setState(() {
+          _currentTrafficRoute = route;
+          _lastMatrixApiCall = DateTime.now();
+          _estimatedMinutes = route.durationMinutes;
+          _routeDistanceKm = route.distanceKm;
+        });
+
+        debugPrint('✅ Traffic route loaded: ${route.distanceKm.toStringAsFixed(1)}km, ${route.durationInTraffic}');
+        debugPrint('📊 Heavy traffic: ${route.hasHeavyTraffic}');
+      }
+    } catch (e) {
+      debugPrint('❌ Matrix API error: $e');
+    }
+  }
+
+  /// Update client-side ETA using driver's actual GPS speed
+  /// Called every GPS update (3-5 seconds) - NO API COST
+  void _updateClientSideETA(double driverLat, double driverLng) {
+    if (_delivery == null || _currentTrafficRoute == null) return;
+
+    // Determine destination based on status
+    double targetLat;
+    double targetLng;
+
+    final status = _delivery!.status;
+    if (status == 'driver_assigned' || status == 'going_to_pickup') {
+      targetLat = _delivery!.pickupLatitude;
+      targetLng = _delivery!.pickupLongitude;
+    } else if (status == 'package_collected' || status == 'in_transit') {
+      targetLat = _delivery!.deliveryLatitude;
+      targetLng = _delivery!.deliveryLongitude;
+    } else {
+      return;
+    }
+
+    // Calculate remaining distance
+    final remainingDistance = MapboxMatrixService.getDistanceMeters(
+      fromLat: driverLat,
+      fromLng: driverLng,
+      toLat: targetLat,
+      toLng: targetLng,
+    );
+
+    // Get driver's speed from GPS (meters per second)
+    final driverSpeed = (_driverLocation?['speed'] as num?)?.toDouble() ?? 0.0;
+
+    // Calculate client-side ETA
+    final etaString = MapboxMatrixService.calculateClientSideETA(
+      remainingDistanceMeters: remainingDistance,
+      driverSpeedMps: driverSpeed,
+      fallbackDurationSeconds: _currentTrafficRoute!.totalDuration,
+    );
+
+    setState(() {
+      _clientSideETA = etaString;
+    });
+
+    debugPrint('⏱️ Client-side ETA: $etaString (speed: ${driverSpeed.toStringAsFixed(1)} m/s)');
   }
 }

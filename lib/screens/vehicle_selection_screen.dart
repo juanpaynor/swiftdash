@@ -220,6 +220,22 @@ class VehicleSelectionCard extends StatelessWidget {
     required this.onSelect,
   });
 
+  // Helper method to get size icon based on weight capacity
+  IconData _getSizeIcon() {
+    if (vehicleType.maxWeightKg <= 5) return Icons.radio_button_checked;
+    if (vehicleType.maxWeightKg <= 20) return Icons.circle;
+    if (vehicleType.maxWeightKg <= 50) return Icons.adjust;
+    return Icons.album;
+  }
+
+  // Helper method to get size label based on weight capacity
+  String _getSizeLabel() {
+    if (vehicleType.maxWeightKg <= 5) return 'Small';
+    if (vehicleType.maxWeightKg <= 20) return 'Medium';
+    if (vehicleType.maxWeightKg <= 50) return 'Large';
+    return 'Extra Large';
+  }
+
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
@@ -230,13 +246,15 @@ class VehicleSelectionCard extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isSelected ? AppTheme.primaryBlue : AppTheme.dividerColor.withOpacity(0.3),
+          color: isSelected 
+              ? vehicleType.primaryColor 
+              : AppTheme.dividerColor.withOpacity(0.3),
           width: isSelected ? 2 : 1,
         ),
         boxShadow: isSelected 
             ? [
                 BoxShadow(
-                  color: AppTheme.primaryBlue.withOpacity(0.2),
+                  color: vehicleType.primaryColor.withOpacity(0.2),
                   blurRadius: 12,
                   offset: const Offset(0, 6),
                 ),
@@ -264,19 +282,39 @@ class VehicleSelectionCard extends StatelessWidget {
                 Row(
                   children: [
                     // Vehicle icon
-                    Container(
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
                       width: isSmallScreen ? 50 : 60,
                       height: isSmallScreen ? 50 : 60,
                       decoration: BoxDecoration(
                         color: isSelected 
-                            ? AppTheme.primaryBlue.withOpacity(0.1) 
-                            : AppTheme.dividerColor.withOpacity(0.1),
+                            ? vehicleType.primaryColor.withOpacity(0.15) 
+                            : vehicleType.lightColor,
                         borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isSelected 
+                              ? vehicleType.primaryColor.withOpacity(0.4)
+                              : vehicleType.primaryColor.withOpacity(0.1),
+                          width: isSelected ? 2 : 1,
+                        ),
+                        boxShadow: isSelected ? [
+                          BoxShadow(
+                            color: vehicleType.primaryColor.withOpacity(0.1),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ] : null,
                       ),
-                      child: Icon(
-                        vehicleType.icon,
-                        size: isSmallScreen ? 28 : 32,
-                        color: isSelected ? AppTheme.primaryBlue : AppTheme.textSecondary,
+                      child: AnimatedScale(
+                        duration: const Duration(milliseconds: 200),
+                        scale: isSelected ? 1.1 : 1.0,
+                        child: Icon(
+                          vehicleType.icon,
+                          size: isSmallScreen ? 28 : 32,
+                          color: isSelected 
+                              ? vehicleType.primaryColor 
+                              : vehicleType.primaryColor.withOpacity(0.7),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -321,7 +359,9 @@ class VehicleSelectionCard extends StatelessWidget {
                           style: GoogleFonts.inter(
                             fontSize: isSmallScreen ? 16 : 18,
                             fontWeight: FontWeight.w700,
-                            color: isSelected ? AppTheme.primaryBlue : AppTheme.textPrimary,
+                            color: isSelected 
+                                ? vehicleType.primaryColor 
+                                : AppTheme.textPrimary,
                           ),
                         ),
                         Text(
@@ -344,30 +384,66 @@ class VehicleSelectionCard extends StatelessWidget {
                   spacing: 8,
                   runSpacing: 6,
                   children: [
+                    // Weight capacity
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 8,
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: AppTheme.infoLight,
+                        color: vehicleType.primaryColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: vehicleType.primaryColor.withOpacity(0.2),
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.fitness_center,
+                            size: 12,
+                            color: vehicleType.primaryColor,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Max ${vehicleType.maxWeightKg.toInt()}kg',
+                            style: GoogleFonts.inter(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: vehicleType.primaryColor,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    // Size indicator
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(
-                            Icons.fitness_center,
+                          Icon(
+                            _getSizeIcon(),
                             size: 12,
-                            color: AppTheme.infoColor,
+                            color: Colors.grey[600],
                           ),
                           const SizedBox(width: 4),
                           Text(
-                            'Max ${vehicleType.maxWeightKg}kg',
+                            _getSizeLabel(),
                             style: GoogleFonts.inter(
                               fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: AppTheme.infoColor,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.grey[600],
                             ),
                           ),
                         ],
@@ -380,7 +456,7 @@ class VehicleSelectionCard extends StatelessWidget {
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color: AppTheme.primaryBlue,
+                          color: vehicleType.primaryColor,
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Row(

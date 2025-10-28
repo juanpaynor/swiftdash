@@ -320,7 +320,7 @@ class ModernAppBar extends StatelessWidget implements PreferredSizeWidget {
                     if (context.canPop()) {
                       context.pop();
                     } else {
-                      context.go('/home');
+                      context.go('/location-selection');
                     }
                   },
                   child: Container(

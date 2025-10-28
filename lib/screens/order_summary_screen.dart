@@ -79,11 +79,13 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
   double get deliveryLng => locationData['deliveryLng'] as double? ?? 0.0;
   
   // Contact data getters
-  String get pickupContactName => contactData?['mainContact']?['name'] ?? _pickupContactNameController.text;
-  String get pickupContactPhone => contactData?['mainContact']?['phone'] ?? _pickupContactPhoneController.text;
-  String get mainContactName => contactData?['mainContact']?['name'] ?? _deliveryContactNameController.text;
-  String get mainContactPhone => contactData?['mainContact']?['phone'] ?? _deliveryContactPhoneController.text;
-  List<Map<String, String>>? get stopsContacts => contactData?['stopsContacts'] as List<Map<String, String>>?;
+  String get pickupContactName => contactData?['pickupContact']?['name'] ?? _pickupContactNameController.text;
+  String get pickupContactPhone => contactData?['pickupContact']?['phone'] ?? _pickupContactPhoneController.text;
+  String get pickupInstructions => contactData?['pickupContact']?['instructions'] ?? '';
+  String get deliveryContactName => contactData?['deliveryContact']?['name'] ?? _deliveryContactNameController.text;
+  String get deliveryContactPhone => contactData?['deliveryContact']?['phone'] ?? _deliveryContactPhoneController.text;
+  String get deliveryInstructions => contactData?['deliveryContact']?['instructions'] ?? '';
+  List<Map<String, String>>? get stopsContacts => contactData?['additional_stops'] as List<Map<String, String>>?;
 
   @override
   void initState() {
@@ -95,15 +97,31 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
   void _prefillContactData() {
     // Pre-fill contact fields if data came from contacts screen
     if (contactData != null) {
-      final mainContact = contactData!['mainContact'] as Map<String, dynamic>?;
-      if (mainContact != null) {
-        _pickupContactNameController.text = mainContact['name'] ?? '';
-        _pickupContactPhoneController.text = mainContact['phone'] ?? '';
-        _deliveryContactNameController.text = mainContact['name'] ?? '';
-        _deliveryContactPhoneController.text = mainContact['phone'] ?? '';
+      final pickupContact = contactData!['pickupContact'] as Map<String, dynamic>?;
+      final deliveryContact = contactData!['deliveryContact'] as Map<String, dynamic>?;
+      
+      if (pickupContact != null) {
+        _pickupContactNameController.text = pickupContact['name'] ?? '';
+        _pickupContactPhoneController.text = pickupContact['phone'] ?? '';
+        _pickupInstructionsController.text = pickupContact['instructions'] ?? '';
+      }
+      
+      if (deliveryContact != null) {
+        _deliveryContactNameController.text = deliveryContact['name'] ?? '';
+        _deliveryContactPhoneController.text = deliveryContact['phone'] ?? '';
+        _deliveryInstructionsController.text = deliveryContact['instructions'] ?? '';
       }
     }
   }
+
+  // Check if contact data was already collected
+  bool get _hasContactData => contactData != null && 
+    contactData!['pickupContact'] != null && 
+    contactData!['deliveryContact'] != null &&
+    contactData!['pickupContact']['name'] != null &&
+    contactData!['pickupContact']['phone'] != null &&
+    contactData!['deliveryContact']['name'] != null &&
+    contactData!['deliveryContact']['phone'] != null;
 
   @override
   void dispose() {
@@ -413,9 +431,14 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
                     _buildPriceBreakdownCard(),
                     const SizedBox(height: 24),
                     
-                    // Contact Information
-                    _buildContactSection(),
-                    const SizedBox(height: 24),
+                    // Contact Information - only show if not collected in previous screen
+                    if (!_hasContactData) ...[
+                      _buildContactSection(),
+                      const SizedBox(height: 24),
+                    ] else ...[
+                      _buildContactSummaryCard(),
+                      const SizedBox(height: 24),
+                    ],
                     
                     // Package Details
                     _buildPackageSection(),
@@ -923,6 +946,271 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
               fontSize: 14,
               fontWeight: FontWeight.w600,
               color: highlight ? AppTheme.primaryBlue : AppTheme.textPrimary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContactSummaryCard() {
+    final pickupContact = contactData?['pickupContact'] as Map<String, dynamic>?;
+    final deliveryContact = contactData?['deliveryContact'] as Map<String, dynamic>?;
+    final stopsContacts = contactData?['additional_stops'] as List?;
+    
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.contacts,
+                color: AppTheme.primaryBlue,
+                size: 24,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Contact Information',
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          
+          // Pickup Contact
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.orange.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Colors.orange.withOpacity(0.2),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.upload_outlined, size: 16, color: Colors.orange),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Pickup Contact',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.orange,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(Icons.person, size: 16, color: AppTheme.textSecondary),
+                    const SizedBox(width: 8),
+                    Text(
+                      pickupContact?['name'] ?? 'No name provided',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        color: AppTheme.textPrimary,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Icon(Icons.phone, size: 16, color: AppTheme.textSecondary),
+                    const SizedBox(width: 8),
+                    Text(
+                      pickupContact?['phone'] ?? 'No phone provided',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+                if (pickupContact?['instructions'] != null && pickupContact!['instructions'].toString().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.notes, size: 16, color: AppTheme.textSecondary),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          pickupContact['instructions'],
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            color: AppTheme.textSecondary,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          
+          const SizedBox(height: 12),
+          
+          // Delivery Contact
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppTheme.primaryBlue.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: AppTheme.primaryBlue.withOpacity(0.2),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.download_outlined, size: 16, color: AppTheme.primaryBlue),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Delivery Contact',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.primaryBlue,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(Icons.person, size: 16, color: AppTheme.textSecondary),
+                    const SizedBox(width: 8),
+                    Text(
+                      deliveryContact?['name'] ?? 'No name provided',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        color: AppTheme.textPrimary,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Icon(Icons.phone, size: 16, color: AppTheme.textSecondary),
+                    const SizedBox(width: 8),
+                    Text(
+                      deliveryContact?['phone'] ?? 'No phone provided',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+                if (deliveryContact?['instructions'] != null && deliveryContact!['instructions'].toString().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.notes, size: 16, color: AppTheme.textSecondary),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          deliveryContact['instructions'],
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            color: AppTheme.textSecondary,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          
+          // Additional stops contacts for multi-stop
+          if (isMultiStop && stopsContacts != null && stopsContacts.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            ...stopsContacts.asMap().entries.map((entry) {
+              final index = entry.key;
+              final contact = entry.value as Map<String, dynamic>;
+              return Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey[200]!),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Stop ${index + 2}',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${contact['name']} • ${contact['phone']}',
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ],
+          
+          const SizedBox(height: 12),
+          
+          // Edit button
+          TextButton.icon(
+            onPressed: () {
+              // Go back to contacts screen to edit
+              context.pop();
+            },
+            icon: Icon(Icons.edit, size: 16, color: AppTheme.primaryBlue),
+            label: Text(
+              'Edit Contacts',
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.primaryBlue,
+              ),
             ),
           ),
         ],
@@ -1712,17 +2000,39 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
   }
 
   Future<void> _handleBookDelivery() async {
-    if (!_formKey.currentState!.validate()) {
-      ModernToast.error(
-        context: context,
-        message: 'Please fill in all required fields',
-      );
+    // Race condition protection - prevent multiple simultaneous booking attempts
+    if (_isBooking) {
+      debugPrint('⚠️ Booking already in progress, ignoring duplicate request');
       return;
     }
-
+    
     setState(() => _isBooking = true);
-
+    
     try {
+      // Only validate form if contact data wasn't collected in previous screen
+      if (!_hasContactData && !_formKey.currentState!.validate()) {
+        ModernToast.error(
+          context: context,
+          message: 'Please fill in all required fields',
+        );
+        setState(() => _isBooking = false);
+        return;
+      }
+      
+      // Validate that we have contact information (either from form or previous screen)
+      if (!_hasContactData && 
+          (_pickupContactNameController.text.trim().isEmpty || 
+           _pickupContactPhoneController.text.trim().isEmpty ||
+           _deliveryContactNameController.text.trim().isEmpty ||
+           _deliveryContactPhoneController.text.trim().isEmpty)) {
+        ModernToast.error(
+          context: context,
+          message: 'Please provide all contact information',
+        );
+        setState(() => _isBooking = false);
+        return;
+      }
+
       // Create payment configuration
       final paymentConfig = PaymentConfig.fromDeliveryData(
         paidBy: _selectedPaymentBy,
@@ -1746,10 +2056,110 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
         
         if (!paymentResult.isSuccess) {
           if (mounted) {
-            ModernToast.error(
+            // Show payment failure dialog with retry options
+            final action = await showDialog<String>(
               context: context,
-              message: paymentResult.statusMessage,
+              barrierDismissible: false,
+              builder: (context) => AlertDialog(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                title: Row(
+                  children: [
+                    Icon(Icons.error_outline, color: AppTheme.errorColor, size: 28),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Payment Failed',
+                      style: GoogleFonts.inter(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      paymentResult?.statusMessage ?? 'An error occurred during payment processing',
+                      style: GoogleFonts.inter(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        color: AppTheme.textSecondary,
+                        height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'What would you like to do?',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, 'cancel'),
+                    child: Text(
+                      'Cancel',
+                      style: GoogleFonts.inter(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, 'change'),
+                    child: Text(
+                      'Change Method',
+                      style: GoogleFonts.inter(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.primaryBlue,
+                      ),
+                    ),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(context, 'retry'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primaryBlue,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: Text(
+                      'Try Again',
+                      style: GoogleFonts.inter(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             );
+            
+            // Handle user choice
+            if (action == 'retry') {
+              // Retry same payment method
+              HapticFeedback.lightImpact();
+              return _handleBookDelivery();
+            } else if (action == 'change') {
+              // User can change payment method (stay on screen)
+              HapticFeedback.lightImpact();
+              ModernToast.info(
+                context: context,
+                message: 'Please select a different payment method',
+              );
+            }
           }
           return;
         }
@@ -1781,8 +2191,8 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
       late Delivery delivery;
       
       // Get contact names/phones from either contactData or text controllers
-      final pickupName = contactData?['mainContact']?['name'] ?? _pickupContactNameController.text;
-      final pickupPhone = contactData?['mainContact']?['phone'] ?? _pickupContactPhoneController.text;
+      final pickupName = contactData?['pickupContact']?['name'] ?? _pickupContactNameController.text;
+      final pickupPhone = contactData?['pickupContact']?['phone'] ?? _pickupContactPhoneController.text;
       
       // Use different methods for single-stop vs multi-stop deliveries
       if (isMultiStop && stops.isNotEmpty) {
@@ -1793,7 +2203,7 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
           
           // Add contact info from contactData
           if (contactData != null) {
-            final stopsContactsList = contactData!['stopsContacts'] as List?;
+            final stopsContactsList = contactData!['additional_stops'] as List?;
             if (stopsContactsList != null && i < stopsContactsList.length) {
               final contactInfo = stopsContactsList[i] as Map<String, dynamic>;
               stop['contactName'] = contactInfo['name'];
@@ -1834,8 +2244,8 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
         );
       } else {
         // Get delivery contact from contactData or text controller
-        final deliveryName = contactData?['mainContact']?['name'] ?? _deliveryContactNameController.text;
-        final deliveryPhone = contactData?['mainContact']?['phone'] ?? _deliveryContactPhoneController.text;
+        final deliveryName = contactData?['deliveryContact']?['name'] ?? _deliveryContactNameController.text;
+        final deliveryPhone = contactData?['deliveryContact']?['phone'] ?? _deliveryContactPhoneController.text;
         
         // Single-stop delivery - use existing function
         delivery = await DeliveryService.bookDeliveryViaFunction(

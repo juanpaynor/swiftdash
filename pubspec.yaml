@@ -40,6 +40,9 @@ dependencies:
   supabase_flutter: ^2.5.2
   flutter_dotenv: ^6.0.0
   
+  # Real-time Communication
+  ably_flutter: ^1.2.35
+  
   # Maps & Location (Google Maps removed - using Mapbox only)
   # google_maps_flutter: ^2.13.1  # REMOVED
   geolocator: ^14.0.2
@@ -62,7 +65,7 @@ dependencies:
   # Enhanced UI Components
   flutter_svg: ^2.0.10+1
   vector_graphics: ^1.1.11+1
-  cached_network_image: ^3.3.1
+  cached_network_image: ^3.4.1
   carousel_slider: ^5.0.0
   smooth_page_indicator: ^1.2.0+3
   flutter_slidable: ^3.1.1
@@ -70,14 +73,18 @@ dependencies:
   expandable: ^5.0.1
   
   # Utilities
-  intl: ^0.19.0
+  intl: ^0.20.2
   uuid: ^4.4.2
   url_launcher: ^6.3.0
-  share_plus: ^10.0.2
+  share_plus: ^12.0.0
   image_picker: ^1.1.2
+  image: ^4.0.17
   permission_handler: ^11.3.1
   device_info_plus: ^10.1.2
   package_info_plus: ^8.0.2
+  shared_preferences: ^2.2.2
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
   
   # Network & Performance
   dio: ^5.7.0
@@ -95,6 +102,7 @@ dependencies:
   
   # Haptic Feedback & Polish
   vibration: ^2.0.0
+  confetti: ^0.8.0
 
 dev_dependencies:
   flutter_test:

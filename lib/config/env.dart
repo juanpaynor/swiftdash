@@ -74,6 +74,23 @@ class Env {
     return envValue?.toLowerCase() == 'sandbox';
   }
 
+  // SECURE: Ably API Keys from environment
+  static String get ablyClientKey {
+    final envValue = dotenv.env['ABLY_CLIENT_KEY'];
+    if (envValue == null || envValue.isEmpty) {
+      throw Exception('ABLY_CLIENT_KEY not found in .env file');
+    }
+    return envValue;
+  }
+
+  static String get ablyRootKey {
+    final envValue = dotenv.env['ABLY_ROOT_KEY'];
+    if (envValue == null || envValue.isEmpty) {
+      throw Exception('ABLY_ROOT_KEY not found in .env file');
+    }
+    return envValue;
+  }
+
   static String get mapProvider {
     final envValue = dotenv.env['MAP_PROVIDER'];
     if (envValue != null && envValue.isNotEmpty) {

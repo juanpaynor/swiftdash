@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 /// Smart back button handler that prevents accidental app exits
@@ -42,96 +41,52 @@ class SmartBackHandler extends StatelessWidget {
   Future<void> _handleBackNavigation(BuildContext context) async {
     final currentLocation = GoRouterState.of(context).uri.toString();
     
-    // Define navigation hierarchy
+    // Define navigation hierarchy - NEVER exit the app
     if (currentLocation.startsWith('/tracking/')) {
-      // From tracking screen, go to home
-      context.go('/home');
+      // From tracking screen, go to location selection
+      context.go('/location-selection');
     } else if (currentLocation == '/matching') {
-      // From matching screen, go to home (delivery is created)
-      context.go('/home');
+      // From matching screen, go to location selection (delivery is created)
+      context.go('/location-selection');
     } else if (currentLocation == '/order-summary') {
       // From order summary, go back to location selection
       context.pop();
     } else if (currentLocation == '/location-selection') {
-      // From location selection, go back to vehicle selection
-      context.pop();
-    } else if (currentLocation == '/create-delivery') {
-      // From vehicle selection, go to home
-      context.go('/home');
+      // From location selection (home), DO NOT EXIT - just stay here
+      // User can use app drawer to navigate elsewhere or press back again (stays on same screen)
+      return;
     } else if (currentLocation == '/addresses') {
-      // From addresses, go to home
-      context.go('/home');
+      // From addresses, go to location selection
+      context.go('/location-selection');
     } else if (currentLocation == '/profile') {
-      // From profile, go to home
-      context.go('/home');
-    } else if (currentLocation == '/home') {
-      // From home screen, show exit confirmation if enabled
-      if (showExitDialog) {
-        _showExitConfirmation(context);
-      }
+      // From profile, go to location selection
+      context.go('/location-selection');
+    } else if (currentLocation == '/order-history') {
+      // From order history, go to location selection
+      context.go('/location-selection');
+    } else if (currentLocation == '/saved-addresses') {
+      // From saved addresses, go to location selection
+      context.go('/location-selection');
+    } else if (currentLocation == '/scheduled-deliveries') {
+      // From scheduled deliveries, go to location selection
+      context.go('/location-selection');
+    } else if (currentLocation == '/home' || currentLocation == '/create-delivery') {
+      // Redirect old routes to location selection
+      context.go('/location-selection');
     } else if (currentLocation == '/' || currentLocation == '/signup') {
-      // From login/signup, exit app
-      _exitApp();
+      // From login/signup, go to location selection (if somehow user pressed back)
+      context.go('/location-selection');
     } else {
-      // Default: try to pop, or go to home
+      // Default: try to pop, or go to location selection
       if (context.canPop()) {
         context.pop();
       } else {
-        context.go('/home');
+        context.go('/location-selection');
       }
     }
   }
 
-  /// Show exit confirmation dialog
-  Future<void> _showExitConfirmation(BuildContext context) async {
-    final shouldExit = await showDialog<bool>(
-      context: context,
-      barrierDismissible: true,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: const Row(
-            children: [
-              Icon(Icons.exit_to_app, color: Colors.orange),
-              SizedBox(width: 8),
-              Text('Exit SwiftDash?'),
-            ],
-          ),
-          content: const Text(
-            'Are you sure you want to exit the app?',
-            style: TextStyle(fontSize: 16),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Stay'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('Exit'),
-            ),
-          ],
-        );
-      },
-    );
 
-    if (shouldExit == true) {
-      _exitApp();
-    }
-  }
-
-  /// Exit the application
-  void _exitApp() {
-    // On Android, this will move the app to background
-    // On iOS, this is not allowed and will be ignored
-    SystemChannels.platform.invokeMethod('SystemNavigator.pop');
-  }
 }
 
 /// Mixin for screens that need custom back button handling
@@ -170,14 +125,14 @@ mixin BackButtonHandlerMixin<T extends StatefulWidget> on State<T> {
 
 /// Extension to make GoRouter navigation more convenient
 extension GoRouterExtension on BuildContext {
-  /// Navigate to home screen
-  void goHome() => go('/home');
+  /// Navigate to location selection screen (new home)
+  void goHome() => go('/location-selection');
   
   /// Navigate to tracking screen
   void goToTracking(String deliveryId) => go('/tracking/$deliveryId');
   
-  /// Navigate to create delivery flow
-  void goToCreateDelivery() => go('/create-delivery');
+  /// Navigate to create delivery flow (redirects to location selection)
+  void goToCreateDelivery() => go('/location-selection');
   
   /// Navigate to addresses
   void goToAddresses() => go('/addresses');
@@ -188,12 +143,12 @@ extension GoRouterExtension on BuildContext {
   /// Navigate to login
   void goToLogin() => go('/');
   
-  /// Safe pop that goes to home if can't pop
+  /// Safe pop that goes to location selection if can't pop
   void safePop() {
     if (canPop()) {
       pop();
     } else {
-      goHome();
+      go('/location-selection');
     }
   }
 }

@@ -151,6 +151,7 @@ class DeliveryService {
     Map<String, dynamic>? paymentMetadata,
   }) async {
     final deliveryData = {
+      'customer_id': _supabase.auth.currentUser!.id, // Add customer_id for RLS
       'vehicle_type_id': vehicleTypeId,
       'pickup_address': pickupAddress,
       'pickup_latitude': pickupLat,
@@ -233,6 +234,7 @@ class DeliveryService {
 
     // Create delivery record
     final deliveryData = {
+      'customer_id': _supabase.auth.currentUser!.id, // Add customer_id for RLS
       'vehicle_type_id': vehicleTypeId,
       'pickup_address': pickupAddress,
       'pickup_latitude': pickupLat,
@@ -245,8 +247,8 @@ class DeliveryService {
       'delivery_latitude': dropoffStops.first['latitude'],
       'delivery_longitude': dropoffStops.first['longitude'],
       // For multi-stop, use generic contact info (specific contact per stop will be in delivery_stops table)
-      'delivery_contact_name': dropoffStops.first['recipientName'] ?? 'Multiple recipients',
-      'delivery_contact_phone': dropoffStops.first['recipientPhone'] ?? '',
+      'delivery_contact_name': dropoffStops.first['contactName'] ?? dropoffStops.first['recipientName'] ?? 'Multiple recipients',
+      'delivery_contact_phone': dropoffStops.first['contactPhone'] ?? dropoffStops.first['recipientPhone'] ?? '',
       'package_description': packageDescription ?? 'Package delivery',
       if (packageWeightKg != null) 'package_weight': packageWeightKg,
       if (packageValue != null) 'package_value': packageValue,

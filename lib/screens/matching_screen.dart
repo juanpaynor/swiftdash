@@ -231,7 +231,7 @@ class _MatchingScreenState extends State<MatchingScreen>
           context: context,
           message: 'Error loading delivery details: $e',
         );
-        context.go('/home');
+        context.go('/location-selection');
       }
     }
   }
@@ -435,6 +435,8 @@ class _MatchingScreenState extends State<MatchingScreen>
 
   void _listenForDriverMatch() {
     // Listen for real-time updates on the delivery
+    debugPrint('👂 Setting up delivery status listener for: ${widget.deliveryId}');
+    
     _deliverySubscription = Supabase.instance.client
         .from('deliveries')
         .stream(primaryKey: ['id'])
@@ -443,23 +445,35 @@ class _MatchingScreenState extends State<MatchingScreen>
           // FIXED: Check if cancelled before processing any updates
           if (_isCancelled || !mounted) return;
           
+          debugPrint('📬 Delivery update received: ${data.length} records');
+          
           if (data.isNotEmpty) {
             final delivery = Delivery.fromJson(data.first);
+            debugPrint('📊 Delivery status: ${delivery.status}');
+            debugPrint('🚗 Driver ID: ${delivery.driverId}');
             
             // Handle different delivery statuses
             if (!_isCancelled) {
               if (delivery.status == 'driver_offered') {
                 // Driver has been offered the delivery, show waiting message
+                debugPrint('📨 Driver offered detected: ${delivery.driverId}');
                 _onDriverOffered(delivery);
               } else if (delivery.status == 'driver_assigned') {
                 // Driver has accepted the delivery!
+                debugPrint('✅ Driver accepted detected: ${delivery.driverId}');
                 _onDriverMatched(delivery);
               } else if (delivery.status == 'cancelled') {
                 // Delivery was cancelled
+                debugPrint('❌ Delivery cancelled detected');
                 _handleSearchFailure('Delivery was cancelled');
+              } else {
+                debugPrint('ℹ️ Other status: ${delivery.status}');
               }
             }
           }
+        },
+        onError: (error) {
+          debugPrint('❌ Delivery stream error: $error');
         });
   }
 
@@ -467,12 +481,13 @@ class _MatchingScreenState extends State<MatchingScreen>
     // Driver has been offered the delivery, show waiting for acceptance
     if (!mounted || _isCancelled) return;
     
+    debugPrint('📨 Driver offered delivery, waiting for acceptance: ${delivery.driverId}');
+    debugPrint('⏰ Starting 3-minute acceptance timeout');
+    
     setState(() {
       _currentMessage = "Driver found! Waiting for acceptance...";
       _isSearching = true; // Keep search animation but change message
     });
-    
-    debugPrint('📨 Driver offered delivery, waiting for acceptance: ${delivery.driverId}');
     
     // Start 3-minute timeout for driver acceptance
     _startDriverAcceptanceTimeout();
@@ -483,16 +498,27 @@ class _MatchingScreenState extends State<MatchingScreen>
   void _startDriverAcceptanceTimeout() {
     _acceptanceTimeoutTimer?.cancel();
     
+    debugPrint('⏰ Acceptance timeout set for 3 minutes');
+    
     // Give driver 3 minutes to accept
     _acceptanceTimeoutTimer = Timer(const Duration(minutes: 3), () {
       if (mounted && !_isCancelled && _isSearching) {
-        debugPrint('⏰ Driver acceptance timeout - continuing search');
+        debugPrint('⏰ Driver acceptance TIMEOUT - 3 minutes elapsed');
+        debugPrint('🔄 Continuing search for another driver');
+        
         setState(() {
           _currentMessage = "Driver didn't respond, finding another driver...";
         });
         
         // Continue searching for another driver
         _startDriverSearch();
+      }
+    });
+    
+    // Also add a 30-second warning
+    Timer(const Duration(seconds: 30), () {
+      if (mounted && !_isCancelled && _isSearching) {
+        debugPrint('⏰ 30 seconds elapsed, still waiting for driver acceptance...');
       }
     });
   }
@@ -588,7 +614,7 @@ class _MatchingScreenState extends State<MatchingScreen>
                 if (context.canPop()) {
                   context.pop();
                 } else {
-                  context.go('/home');
+                  context.go('/location-selection');
                 }
               },
               icon: Icons.location_on_rounded,
@@ -1229,7 +1255,7 @@ class _MatchingScreenState extends State<MatchingScreen>
               if (context.canPop()) {
                 context.pop();
               } else {
-                context.go('/home');
+                context.go('/location-selection');
               }
             },
             child: Text(
@@ -1279,7 +1305,7 @@ class _MatchingScreenState extends State<MatchingScreen>
           context: context,
           message: 'Delivery request cancelled',
         );
-        context.go('/home');
+        context.go('/location-selection');
       }
     } catch (e) {
       if (mounted) {

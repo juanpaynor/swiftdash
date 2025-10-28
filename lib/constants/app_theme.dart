@@ -2,42 +2,50 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class AppTheme {
-  // SwiftDash Brand Colors (from logo)
-  static const Color primaryBlue = Color(0xFF2E4A9B); // Dark blue from 'SD' logo
-  static const Color primaryBlueDark = Color(0xFF1E3A8A);
-  static const Color secondaryBlue = Color(0xFF1DA1F2); // Light blue from 'SD' logo  
-  static const Color accentCyan = Color(0xFF4FC3F7); // Lighter blue accent
-  static const Color accentTeal = Color(0xFF06B6D4);
+  // ✨ ANGKAS-INSPIRED BLUE GRADIENT COLOR SYSTEM ✨
   
-  // Gradient Colors - SwiftDash Brand
-  static const Color gradientStart = primaryBlue; // Use SwiftDash dark blue
-  static const Color gradientEnd = secondaryBlue; // Use SwiftDash light blue
-  static const Color gradientAccent = accentCyan;
+  // Primary Blue Gradient (Headers, Primary Actions)
+  static const Color primaryBlue = Color(0xFF00B4DB); // Cyan Blue (gradient start)
+  static const Color primaryBlueDark = Color(0xFF0083B0); // Deep Ocean Blue (gradient end)
+  static const Color primaryBlueLight = Color(0xFF56CCF2); // Light Cyan (hover states)
   
-  // Success & Status Colors (Premium palette)
-  static const Color successColor = Color(0xFF10B981);
+  // Accent Cyan Gradient (Highlights, Secondary Actions)
+  static const Color accentCyan = Color(0xFF56CCF2); // Light Cyan (accent start)
+  static const Color accentBlue = Color(0xFF2F80ED); // Bright Blue (accent end)
+  static const Color accentTeal = Color(0xFF06B6D4); // Teal (tertiary)
+  
+  // Legacy colors (kept for backward compatibility)
+  static const Color secondaryBlue = primaryBlue; // Alias
+  
+  // Gradient Colors - Angkas Blue Style
+  static const Color gradientStart = primaryBlue; // #00B4DB
+  static const Color gradientEnd = primaryBlueDark; // #0083B0
+  static const Color gradientAccent = accentCyan; // #56CCF2
+  
+  // Success & Status Colors (Angkas Style)
+  static const Color successColor = Color(0xFF10B981); // Green
   static const Color successLight = Color(0xFFECFDF5);
-  static const Color warningColor = Color(0xFFF59E0B);
+  static const Color warningColor = Color(0xFFF59E0B); // Orange
   static const Color warningLight = Color(0xFFFEF3C7);
-  static const Color errorColor = Color(0xFFEF4444);
+  static const Color errorColor = Color(0xFFEF4444); // Red
   static const Color errorLight = Color(0xFFFEF2F2);
-  static const Color infoColor = Color(0xFF3B82F6);
+  static const Color infoColor = Color(0xFF3B82F6); // Info blue
   static const Color infoLight = Color(0xFFEFF6FF);
   
-  // Neutral Colors (Modern minimalist)
-  static const Color backgroundColor = Color(0xFFFAFBFC);
-  static const Color surfaceColor = Color(0xFFFFFFFF);
-  static const Color cardColor = Color(0xFFFFFFFF);
-  static const Color sheetColor = Color(0xFFFCFCFD);
-  static const Color dividerColor = Color(0xFFE5E7EB);
-  static const Color borderColor = Color(0xFFD1D5DB);
+  // Neutral Colors (Clean & Modern)
+  static const Color backgroundColor = Color(0xFFF8FAFB); // Off-white with blue tint
+  static const Color surfaceColor = Color(0xFFFFFFFF); // Pure white
+  static const Color cardColor = Color(0xFFFFFFFF); // Pure white for cards
+  static const Color sheetColor = Color(0xFFF8FAFB); // Light background for sheets
+  static const Color dividerColor = Color(0xFFE5E7EB); // Light gray divider
+  static const Color borderColor = Color(0xFFE5E7EB); // Light gray border
   
-  // Text Colors (High contrast for accessibility)
-  static const Color textPrimary = Color(0xFF111827);
-  static const Color textSecondary = Color(0xFF4B5563);
-  static const Color textTertiary = Color(0xFF9CA3AF);
-  static const Color textHint = Color(0xFFD1D5DB);
-  static const Color textInverse = Color(0xFFFFFFFF);
+  // Text Colors (Neutral & High Contrast)
+  static const Color textPrimary = Color(0xFF1A1F36); // Almost black
+  static const Color textSecondary = Color(0xFF6B7280); // Medium gray
+  static const Color textTertiary = Color(0xFF9CA3AF); // Light gray
+  static const Color textHint = Color(0xFFD1D5DB); // Very light gray
+  static const Color textInverse = Color(0xFFFFFFFF); // White (for blue backgrounds)
   
   // Shadow Colors
   static const Color shadowLight = Color(0x0D000000);
@@ -45,43 +53,51 @@ class AppTheme {
   static const Color shadowDark = Color(0x26000000);
   
   // Premium Gradients
+  // Primary Blue Gradient (Headers, Primary Actions, Backgrounds)
   static const LinearGradient primaryGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [gradientStart, gradientEnd],
+    colors: [primaryBlue, primaryBlueDark], // #00B4DB → #0083B0 (Cyan to Deep Ocean)
     stops: [0.0, 1.0],
   );
   
+  // Accent Cyan Gradient (Highlights, Secondary Actions, Active States)
   static const LinearGradient accentGradient = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
-    colors: [gradientAccent, gradientEnd],
+    colors: [accentCyan, accentBlue], // #56CCF2 → #2F80ED (Light Cyan to Bright Blue)
     stops: [0.0, 1.0],
   );
   
+  // Background Gradient (Page backgrounds)
   static const LinearGradient backgroundGradient = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
-    colors: [Color(0xFFFAFBFC), Color(0xFFFFFFFF)],
+    colors: [Color(0xFFF8FAFB), Color(0xFFFFFFFF)], // Off-white to pure white
   );
   
+  // Shimmer Gradient (Loading states)
   static const LinearGradient shimmerGradient = LinearGradient(
-    colors: [Color(0xFFEBEBF4), Color(0xFFF4F4F6), Color(0xFFEBEBF4)],
+    colors: [
+      Color(0xFFE0F2FE), 
+      Color(0xFFF0F9FF), 
+      Color(0xFFE0F2FE)
+    ], // Soft blue shimmer
     stops: [0.1, 0.3, 0.4],
     begin: Alignment(-1.0, -0.3),
     end: Alignment(1.0, 0.3),
   );
 
-  // Advanced Shadow Definitions
+  // Shadow Definitions (Angkas Style - Soft & Subtle)
   static List<BoxShadow> get cardShadow => [
     BoxShadow(
       color: shadowLight,
-      blurRadius: 10,
-      offset: const Offset(0, 1),
+      blurRadius: 8,
+      offset: const Offset(0, 2),
     ),
     BoxShadow(
       color: shadowMedium,
-      blurRadius: 15,
+      blurRadius: 12,
       offset: const Offset(0, 4),
     ),
   ];
@@ -89,21 +105,22 @@ class AppTheme {
   static List<BoxShadow> get elevatedShadow => [
     BoxShadow(
       color: shadowMedium,
-      blurRadius: 20,
-      offset: const Offset(0, 8),
+      blurRadius: 16,
+      offset: const Offset(0, 6),
     ),
     BoxShadow(
       color: shadowLight,
-      blurRadius: 40,
-      offset: const Offset(0, 16),
+      blurRadius: 24,
+      offset: const Offset(0, 12),
     ),
   ];
   
+  // Button Shadow (Blue glow for primary buttons)
   static List<BoxShadow> get buttonShadow => [
     BoxShadow(
-      color: primaryBlue.withOpacity(0.3),
+      color: primaryBlue.withOpacity(0.25), // Updated to use new primaryBlue (#00B4DB)
       blurRadius: 12,
-      offset: const Offset(0, 6),
+      offset: const Offset(0, 4),
     ),
   ];
 

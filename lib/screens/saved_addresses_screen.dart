@@ -117,7 +117,7 @@ class _SavedAddressesScreenState extends State<SavedAddressesScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: AppTheme.textPrimary),
-          onPressed: () => context.pop(),
+          onPressed: () => context.go('/location-selection'),
         ),
         title: Text(
           'Saved Addresses',

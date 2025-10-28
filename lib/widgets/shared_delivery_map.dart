@@ -3,16 +3,20 @@ import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:flutter/services.dart';
 import 'dart:async';
+import 'dart:convert'; // For JSON encoding
 import 'dart:math' as math;
 
 import '../services/mapbox_service.dart';
+import '../services/driver_marker_service.dart';
+import '../services/map_marker_service.dart';
 import '../constants/app_theme.dart';
 
 // Polyline phases for delivery tracking
 enum PolylinePhase {
   none,           // No polyline needed (arrived, pending, etc.)
   driverToPickup, // Phase 1: Driver heading to pickup location
-  pickupToDelivery, // Phase 2: Driver heading from pickup to delivery
+  driverToDelivery, // Phase 2: Driver with package heading to delivery
+  pickupToDelivery, // Phase 2 (deprecated): Pickup to delivery for old tracking
   routePreview,   // Route preview: Pickup to delivery for location selection
 }
 
@@ -37,10 +41,15 @@ class SharedDeliveryMap extends StatefulWidget {
   
   // Driver vehicle information for map display
   final String? driverVehicleType;
+  final String? driverProfilePictureUrl;
+  final String? driverId;
   
   // Multi-stop delivery support
   final bool isMultiStop;
   final List<Map<String, dynamic>>? additionalStops;
+
+  // Traffic-aware routing (Matrix API) - ONLY for location selection screen
+  final List<Map<String, dynamic>>? trafficSegments;
 
   const SharedDeliveryMap({
     super.key,
@@ -56,8 +65,11 @@ class SharedDeliveryMap extends StatefulWidget {
     this.deliveryStatus,
     this.onRouteCalculated,
     this.driverVehicleType,
+    this.driverProfilePictureUrl,
+    this.driverId,
     this.isMultiStop = false,
     this.additionalStops,
+    this.trafficSegments,
   });
 
   @override
@@ -76,6 +88,21 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
   Position? _deliveryLocation;
   Position? _driverLocation;
   
+  // Driver interpolation for smooth movement
+  Position? _driverInterpolationStart;
+  Position? _driverInterpolationTarget;
+  late AnimationController _driverAnimationController;
+  Animation<double>? _driverLatAnimation;
+  Animation<double>? _driverLngAnimation;
+  
+  // Debouncer for location updates (prevent animation spam)
+  Timer? _locationUpdateDebouncer;
+  Position? _pendingDriverLocation;
+  
+  // 🎬 Line trim animation for traffic polylines
+  late AnimationController _lineTrimController;
+  Animation<double>? _lineTrimAnimation;
+  
   // Vehicle marker management
   PointAnnotation? _driverMarker;
   bool _vehicleIconsLoaded = false;
@@ -84,6 +111,9 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
   geo.Position? _userLocation;
   
   // Marker tracking
+  PointAnnotation? _pickupMarker; // Track pickup pin marker
+  PointAnnotation? _deliveryMarker; // Track delivery pin marker
+  List<PointAnnotation> _additionalStopMarkers = []; // Track multi-stop markers
   List<CircleAnnotation> _pickupMarkerCircles = [];
   List<CircleAnnotation> _dropoffMarkerCircles = [];
   List<CircleAnnotation> _driverMarkerCircles = [];
@@ -91,6 +121,16 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
   List<List<CircleAnnotation>> _multiStopMarkerCircles = []; // 🚏 Track multi-stop markers
   CircleAnnotation? _userLocationMarker;
   CircleAnnotation? _userLocationAccuracyCircle;
+  
+  // 🔧 PERFORMANCE: Track marker existence to prevent unnecessary recreation
+  bool _pickupMarkerExists = false;
+  bool _deliveryMarkerExists = false;
+  bool _driverMarkerExists = false;
+  bool _polylineExists = false;
+  
+  // 🔧 PERFORMANCE: Profile picture download state (prevent repeated failures)
+  String? _lastAttemptedProfileUrl;
+  bool _profilePictureDownloadFailed = false;
   
   // User location tracking
   StreamSubscription<geo.Position>? _locationSubscription;
@@ -109,6 +149,54 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     
     // Start smooth repeating pulsing animation
     _pulseController.repeat();
+    
+    // Initialize driver interpolation animation controller
+    _driverAnimationController = AnimationController(
+      duration: const Duration(seconds: 5), // Match typical GPS update interval
+      vsync: this,
+    );
+    
+    // Listen to animation updates to smoothly move driver marker
+    _driverAnimationController.addListener(() {
+      if (_driverLatAnimation != null && _driverLngAnimation != null && mounted) {
+        final newPosition = Position(
+          _driverLngAnimation!.value,
+          _driverLatAnimation!.value,
+        );
+        
+        setState(() {
+          _driverLocation = newPosition;
+        });
+        
+        // Update marker position on map during animation
+        if (_driverMarker != null && _pointAnnotationManager != null) {
+          _driverMarker!.geometry = Point(coordinates: newPosition);
+          _pointAnnotationManager!.update(_driverMarker!);
+        }
+      }
+    });
+    
+    // 🎬 Initialize line trim animation controller for traffic polylines
+    _lineTrimController = AnimationController(
+      duration: const Duration(milliseconds: 1500), // 1.5 second smooth animation
+      vsync: this,
+    );
+    
+    // Create tween animation from 0.0 (hidden) to 1.0 (fully visible)
+    _lineTrimAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _lineTrimController,
+      curve: Curves.easeInOut, // Smooth acceleration and deceleration
+    ));
+    
+    // Listen to line trim animation to update map
+    _lineTrimController.addListener(() {
+      if (_mapboxMap != null && mounted) {
+        _updateLineTrimOffset();
+      }
+    });
     
     // Initialize locations from widget coordinates if provided
     _updateLocationsFromWidget();
@@ -169,19 +257,96 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     if (pickupChanged || deliveryChanged || driverChanged || statusChanged || additionalStopsChanged) {
       debugPrint('🔄 SharedDeliveryMap updating - pickup: $pickupChanged, delivery: $deliveryChanged, driver: $driverChanged, status: $statusChanged, stops: $additionalStopsChanged');
       
-      // Update locations without camera adjustments for driver updates
-      _updateLocationsFromWidgetSilently();
+      // 🔧 PERFORMANCE FIX: Only update what changed, don't recreate everything
       
-      // Only adjust camera for pickup/delivery changes or initial setup
-      if ((pickupChanged || deliveryChanged || additionalStopsChanged) && !_hasUserInteractedWithCamera) {
-        _smartCameraAdjustment();
+      // Update pickup marker ONLY when pickup changes
+      if (pickupChanged && widget.pickupLatitude != null && widget.pickupLongitude != null) {
+        _pickupLocation = Position(widget.pickupLongitude!, widget.pickupLatitude!);
+        _updatePickupMarkerOnly();
+        _pickupMarkerExists = true;
+        
+        // Adjust camera for pickup changes (if user hasn't interacted)
+        if (!_hasUserInteractedWithCamera) {
+          _smartCameraAdjustment();
+        }
       }
       
-      // Update polyline when status changes OR when stops change
-      if (statusChanged || additionalStopsChanged) {
-        debugPrint('🔄 Status change: ${oldWidget.deliveryStatus} → ${widget.deliveryStatus}');
+      // Update delivery marker ONLY when delivery changes
+      if (deliveryChanged && widget.deliveryLatitude != null && widget.deliveryLongitude != null) {
+        _deliveryLocation = Position(widget.deliveryLongitude!, widget.deliveryLatitude!);
+        _updateDropoffMarkerOnly();
+        _deliveryMarkerExists = true;
+        
+        // Adjust camera for delivery changes (if user hasn't interacted)
+        if (!_hasUserInteractedWithCamera) {
+          _smartCameraAdjustment();
+        }
+      }
+      
+      // Update multi-stop markers when stops change
+      if (additionalStopsChanged) {
         debugPrint('🚏 Stops changed: Multi-stop=${widget.isMultiStop}, Stops count=${widget.additionalStops?.length ?? 0}');
-        _updatePolylineForStatus();
+        _updateMultiStopMarkers();
+        
+        // Adjust camera for stop changes
+        if (!_hasUserInteractedWithCamera) {
+          _smartCameraAdjustment();
+        }
+      }
+      
+      // Update driver position ONLY when driver changes
+      if (driverChanged && widget.driverLatitude != null && widget.driverLongitude != null) {
+        final newDriver = Position(widget.driverLongitude!, widget.driverLatitude!);
+        
+        if (_driverLocation == null || !_driverMarkerExists) {
+          // First time - create marker immediately (no debounce)
+          _driverLocation = newDriver;
+          _updateDriverMarkerOnly();
+          _driverMarkerExists = true;
+          debugPrint('🚗 Driver marker created for first time: ${newDriver.lat}, ${newDriver.lng}');
+          
+          // ONLY draw polyline if this is the very first driver location AND no polyline exists
+          if (!_polylineExists && _pickupLocation != null && _deliveryLocation != null) {
+            debugPrint('🔄 Initial polyline creation with first driver location');
+            _updatePolylineForStatus().then((_) {
+              if (mounted) {
+                setState(() {
+                  _polylineExists = true;
+                });
+              }
+            });
+          }
+        } else {
+          // Subsequent updates - debounce to prevent animation spam
+          _debouncedDriverUpdate(newDriver);
+        }
+      }
+      
+      // Update polyline ONLY when:
+      // 1. Status changes (delivery phase transitions)
+      // 2. Stops change (multi-stop routing updates)
+      // 3. Pickup or delivery locations change (route needs recalculation)
+      // NOTE: Driver location changes do NOT trigger polyline redraw!
+      
+      if (statusChanged || additionalStopsChanged || pickupChanged || deliveryChanged) {
+        // Reset polyline flag when locations change to force full redraw
+        if (pickupChanged || deliveryChanged) {
+          _polylineExists = false;
+          debugPrint('🔄 Location changed - clearing and redrawing route');
+          debugPrint('   - Pickup changed: $pickupChanged, Delivery changed: $deliveryChanged');
+        } else {
+          debugPrint('🔄 Status/stops changed - updating polyline');
+          debugPrint('   - Status: ${oldWidget.deliveryStatus} → ${widget.deliveryStatus}');
+        }
+        
+        // Call async method to update polyline - it will clear old ones first
+        _updatePolylineForStatus().then((_) {
+          if (mounted) {
+            setState(() {
+              _polylineExists = true;
+            });
+          }
+        });
       }
     }
   }
@@ -208,13 +373,21 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       }
     }
     
-    // Update driver location (real-time tracking) - NO CAMERA ADJUSTMENT
+    // Update driver location (real-time tracking) - SMOOTH INTERPOLATION
     if (widget.driverLatitude != null && widget.driverLongitude != null) {
       final newDriver = Position(widget.driverLongitude!, widget.driverLatitude!);
       if (_driverLocation?.lat != newDriver.lat || _driverLocation?.lng != newDriver.lng) {
-        _driverLocation = newDriver;
+        // CRITICAL FIX: Set driver location immediately so marker can be created
+        if (_driverLocation == null) {
+          // First time - set immediately without animation
+          _driverLocation = newDriver;
+          debugPrint('🚗 Driver location set for first time: ${newDriver.lat}, ${newDriver.lng}');
+        } else {
+          // Subsequent updates - animate smoothly
+          _animateDriverToPosition(newDriver);
+          debugPrint('🎬 Driver location animation started to: ${newDriver.lat}, ${newDriver.lng}');
+        }
         shouldUpdate = true;
-        debugPrint('🚗 Driver location updated silently: ${newDriver.lat}, ${newDriver.lng}');
       }
     }
     
@@ -250,53 +423,155 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     _updateLocationsFromWidgetSilently();
   }
 
+  // Animate driver marker smoothly from current position to target position
+  void _animateDriverToPosition(Position targetPosition) {
+    // Get start position (current location or target if first update)
+    final startPosition = _driverLocation ?? targetPosition;
+    
+    // Don't animate if positions are identical
+    if (startPosition.lat == targetPosition.lat && startPosition.lng == targetPosition.lng) {
+      return;
+    }
+    
+    // Calculate distance to determine animation duration
+    final distance = _calculateDistance(
+      startPosition.lat.toDouble(),
+      startPosition.lng.toDouble(),
+      targetPosition.lat.toDouble(),
+      targetPosition.lng.toDouble(),
+    );
+    
+    // Adjust animation duration based on distance
+    // OPTIMIZED: Match animation speed to typical GPS update frequency (3 seconds)
+    // This ensures smooth tracking without lag at high speeds (60km/h)
+    Duration animationDuration;
+    if (distance > 0.3) {
+      // Distance > 300m - likely GPS jump or very high speed, update instantly
+      setState(() {
+        _driverLocation = targetPosition;
+      });
+      debugPrint('⚡ Large distance jump (${distance.toStringAsFixed(0)}m), updating instantly');
+      return;
+    } else if (distance > 0.1) {
+      // 100-300m - high speed driving (60-100 km/h)
+      // Use 3 seconds to match typical GPS update frequency
+      animationDuration = const Duration(milliseconds: 2800);
+    } else if (distance > 0.03) {
+      // 30-100m - normal city driving (30-50 km/h)
+      // Use 2.5 seconds for smooth tracking
+      animationDuration = const Duration(milliseconds: 2500);
+    } else {
+      // < 30m - slow movement or stopped
+      // Use 2 seconds for short distances
+      animationDuration = const Duration(seconds: 2);
+    }
+    
+    // Store interpolation endpoints
+    _driverInterpolationStart = startPosition;
+    _driverInterpolationTarget = targetPosition;
+    
+    // Update animation duration
+    _driverAnimationController.duration = animationDuration;
+    
+    // Create tween animations for latitude and longitude
+    _driverLatAnimation = Tween<double>(
+      begin: startPosition.lat.toDouble(),
+      end: targetPosition.lat.toDouble(),
+    ).animate(CurvedAnimation(
+      parent: _driverAnimationController,
+      curve: Curves.linear, // Constant speed for realistic movement
+    ));
+    
+    _driverLngAnimation = Tween<double>(
+      begin: startPosition.lng.toDouble(),
+      end: targetPosition.lng.toDouble(),
+    ).animate(CurvedAnimation(
+      parent: _driverAnimationController,
+      curve: Curves.linear,
+    ));
+    
+    // Start animation from beginning
+    _driverAnimationController.forward(from: 0.0);
+    
+    debugPrint('🎬 Driver animation: ${distance.toStringAsFixed(0)}m over ${animationDuration.inSeconds}s');
+    debugPrint('   From: (${startPosition.lat}, ${startPosition.lng})');
+    debugPrint('   To: (${targetPosition.lat}, ${targetPosition.lng})');
+  }
+
+  // Debounced driver location update to prevent animation spam
+  void _debouncedDriverUpdate(Position newPosition) {
+    // Store the latest position
+    _pendingDriverLocation = newPosition;
+    
+    // Cancel previous debounce timer
+    _locationUpdateDebouncer?.cancel();
+    
+    // Set new debounce timer (150ms - short enough to feel instant, long enough to batch rapid updates)
+    _locationUpdateDebouncer = Timer(const Duration(milliseconds: 150), () {
+      if (_pendingDriverLocation != null && mounted) {
+        _animateDriverToPosition(_pendingDriverLocation!);
+        debugPrint('🎬 Debounced driver position animated to: ${_pendingDriverLocation!.lat}, ${_pendingDriverLocation!.lng}');
+      }
+    });
+  }
+
   void _onMapCreated(MapboxMap mapboxMap) async {
     _mapboxMap = mapboxMap;
     print('Mapbox map created successfully');
     
-    try {
-      // Create annotation managers
-      _pointAnnotationManager = await _mapboxMap!.annotations.createPointAnnotationManager();
-      _polylineAnnotationManager = await _mapboxMap!.annotations.createPolylineAnnotationManager();
-      _circleAnnotationManager = await _mapboxMap!.annotations.createCircleAnnotationManager();
-      _stopNumberAnnotationManager = await _mapboxMap!.annotations.createPointAnnotationManager();
-      print('Annotation managers created (including stop numbers)');
-      
-      // Initialize location pucks for driver and user
-      await _setupLocationPucks();
-      
-      // Set up camera interaction listeners
-      await _setupCameraInteractionListeners();
-      
-      // Enable map interactions with 3D support
-      await _mapboxMap!.gestures.updateSettings(GesturesSettings(
-        rotateEnabled: true,
-        pitchEnabled: true,        // Allow pitch gestures for 3D tilt
-        scrollEnabled: true,
-        simultaneousRotateAndPinchToZoomEnabled: true,
-        pinchToZoomEnabled: true,
-        quickZoomEnabled: true,    // Enhanced zoom performance
-        doubleTapToZoomInEnabled: true,
-        doubleTouchToZoomOutEnabled: true,
-      ));
-      print('Enhanced map gestures enabled (3D ready)');
-      
-      // Load vehicle icons for map markers
-      await _loadVehicleIcons();
-      
-      // Update markers if locations are already set
-      await _updateMapMarkers();
-      
-      // Update user location if available
-      if (_userLocation != null) {
-        await _updateUserLocationMarker(_userLocation!);
+    // Defer heavy initialization to prevent main thread blocking
+    // This allows the map to render immediately while setup happens in background
+    Future.microtask(() async {
+      try {
+        // Create annotation managers sequentially but wrapped in microtask
+        // to prevent blocking the main thread during map initialization
+        _pointAnnotationManager = await _mapboxMap!.annotations.createPointAnnotationManager();
+        _polylineAnnotationManager = await _mapboxMap!.annotations.createPolylineAnnotationManager();
+        _circleAnnotationManager = await _mapboxMap!.annotations.createCircleAnnotationManager();
+        _stopNumberAnnotationManager = await _mapboxMap!.annotations.createPointAnnotationManager();
+        print('Annotation managers created (including stop numbers)');
+        
+        // Initialize location pucks for driver and user
+        await _setupLocationPucks();
+        
+        // Set up camera interaction listeners
+        await _setupCameraInteractionListeners();
+        
+        // Enable map interactions with 3D support
+        await _mapboxMap!.gestures.updateSettings(GesturesSettings(
+          rotateEnabled: true,
+          pitchEnabled: true,        // Allow pitch gestures for 3D tilt
+          scrollEnabled: true,
+          simultaneousRotateAndPinchToZoomEnabled: true,
+          pinchToZoomEnabled: true,
+          quickZoomEnabled: true,    // Enhanced zoom performance
+          doubleTapToZoomInEnabled: true,
+          doubleTouchToZoomOutEnabled: true,
+        ));
+        print('Enhanced map gestures enabled (3D ready)');
+        
+        // Load vehicle icons for map markers (async, non-blocking)
+        _loadVehicleIcons();
+        
+        // 🔧 CRITICAL FIX: Initialize driver location from widget props NOW
+        // This ensures _driverLocation is set when map is ready
+        if (widget.driverLatitude != null && widget.driverLongitude != null) {
+          _driverLocation = Position(widget.driverLongitude!, widget.driverLatitude!);
+          debugPrint('🚗 Driver location initialized on map creation: ${_driverLocation!.lat}, ${_driverLocation!.lng}');
+        }
+        
+        // Update markers if locations are already set (non-blocking)
+        _updateMapMarkers();
+        
+        // 🎯 Enable native Mapbox location puck (replaces custom user location marker)
+        _enableNativeUserLocationPuck();
+        
+        // Auto-focus on user location when map loads
+        _autoFocusOnUserLocation();
+      } catch (e) {
+        print('Error setting up map annotations: $e');
       }
-      
-      // Auto-focus on user location when map loads
-      _autoFocusOnUserLocation();
-    } catch (e) {
-      print('Error setting up map annotations: $e');
-    }
+    });
   }
 
   // Set up listeners to detect user camera interactions
@@ -310,6 +585,39 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     }
   }
 
+  // 🎯 Enable native Mapbox location puck (simple blue dot, no direction arrow)
+  Future<void> _enableNativeUserLocationPuck() async {
+    if (_mapboxMap == null) return;
+    
+    try {
+      debugPrint('🎯 Enabling native user location puck...');
+      
+      await _mapboxMap!.location.updateSettings(LocationComponentSettings(
+        // Basic settings
+        enabled: true,
+        
+        // NO direction arrow (simple dot only)
+        puckBearingEnabled: false,
+        
+        // Smooth pulsing animation (native GPU-accelerated)
+        pulsingEnabled: true,
+        pulsingColor: const Color(0xFF007AFF).value, // iOS blue
+        pulsingMaxRadius: 50.0,
+        
+        // Accuracy ring (auto-scaled based on GPS accuracy)
+        showAccuracyRing: true,
+        accuracyRingColor: const Color(0xFF007AFF).withOpacity(0.08).value,
+        accuracyRingBorderColor: const Color(0xFF007AFF).withOpacity(0.15).value,
+      ));
+      
+      debugPrint('✅ Native location puck enabled (no direction, with pulsing)');
+    } catch (e) {
+      debugPrint('❌ Error enabling native location puck: $e');
+      // Fall back to manual location tracking if native fails
+      _startLocationTracking();
+    }
+  }
+
   // Handle user gesture interactions (pan, zoom, etc.)
   void _onUserInteraction() {
     _hasUserInteractedWithCamera = true;
@@ -319,6 +627,12 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
   
   // Handle map tap for location selection
   void _onMapTapped(MapContentGestureContext context) async {
+    // Only handle map taps if onLocationSelected callback is provided (location selection mode)
+    if (widget.onLocationSelected == null) {
+      // Tracking mode - no location selection allowed
+      return;
+    }
+    
     final tappedPoint = context.point;
     final lat = tappedPoint.coordinates.lat.toDouble();
     final lng = tappedPoint.coordinates.lng.toDouble();
@@ -637,8 +951,8 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     if (_polylineAnnotationManager == null) return;
     
     try {
-      // Always clear existing polylines first
-      await _polylineAnnotationManager!.deleteAll();
+      // 🧹 Use centralized clearing method
+      await clearAllPolylines();
       print('🗺️ Cleared existing polylines for status update');
       
       // Determine polyline phase based on delivery status
@@ -648,6 +962,9 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       switch (polylinePhase) {
         case PolylinePhase.driverToPickup:
           await _drawDriverToPickupRoute();
+          break;
+        case PolylinePhase.driverToDelivery:
+          await _drawDriverToDeliveryRoute();
           break;
         case PolylinePhase.pickupToDelivery:
           await _drawPickupToDeliveryRoute();
@@ -692,7 +1009,7 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       case 'package_collected':
       case 'going_to_destination':
       case 'in_transit':
-        phase = PolylinePhase.pickupToDelivery;
+        phase = PolylinePhase.driverToDelivery; // Driver with package → delivery
         break;
       case 'pickup_arrived':
       case 'at_destination':
@@ -725,20 +1042,43 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       print('🗺️ Drawing Phase 1 route: Driver → Pickup');
       print('🗺️ Route coordinates: (${_driverLocation!.lat}, ${_driverLocation!.lng}) → (${_pickupLocation!.lat}, ${_pickupLocation!.lng})');
       
-      // Get route from driver's current location to pickup
-      final route = await MapboxService.getRoute(
-        _driverLocation!.lat.toDouble(), _driverLocation!.lng.toDouble(),
-        _pickupLocation!.lat.toDouble(), _pickupLocation!.lng.toDouble()
-      );
-      
-      if (route != null) {
-        // Use DoorDash-style vibrant blue
-        await _createPolyline(route, const Color(0xFF007AFF), 'Driver → Pickup');
+      // Check if traffic segments are available (from tracking screen)
+      if (widget.trafficSegments != null && widget.trafficSegments!.isNotEmpty) {
+        print('🚦 Using traffic-aware polylines for Driver → Pickup route');
+        await _createTrafficPolylines(widget.trafficSegments!, 'Driver → Pickup (Traffic)');
         
-        // Calculate and report ETA
-        final distance = _calculateRouteDistance(route);
-        final estimatedMinutes = _estimateDeliveryTime(distance, isToPickup: true);
-        widget.onRouteCalculated?.call(distance, estimatedMinutes);
+        // Calculate distance from traffic segments
+        double totalDistance = 0.0;
+        for (final segment in widget.trafficSegments!) {
+          final distance = segment['distance'] as num?;
+          if (distance != null) {
+            totalDistance += distance.toDouble();
+          }
+        }
+        
+        // Convert meters to kilometers
+        final distanceKm = totalDistance / 1000.0;
+        final estimatedMinutes = _estimateDeliveryTime(distanceKm, isToPickup: true);
+        widget.onRouteCalculated?.call(distanceKm, estimatedMinutes);
+        
+        print('✅ Traffic route created: ${distanceKm.toStringAsFixed(1)}km, ${estimatedMinutes.toStringAsFixed(0)} min');
+      } else {
+        // Fallback to simple polyline if no traffic data
+        print('🗺️ Using simple polyline for Driver → Pickup (no traffic data)');
+        final route = await MapboxService.getRoute(
+          _driverLocation!.lat.toDouble(), _driverLocation!.lng.toDouble(),
+          _pickupLocation!.lat.toDouble(), _pickupLocation!.lng.toDouble()
+        );
+        
+        if (route != null) {
+          // Use DoorDash-style vibrant blue
+          await _createPolyline(route, const Color(0xFF007AFF), 'Driver → Pickup');
+          
+          // Calculate and report ETA
+          final distance = _calculateRouteDistance(route);
+          final estimatedMinutes = _estimateDeliveryTime(distance, isToPickup: true);
+          widget.onRouteCalculated?.call(distance, estimatedMinutes);
+        }
       }
     } catch (e) {
       print('❌ Error drawing driver to pickup route: $e');
@@ -775,6 +1115,66 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     }
   }
 
+  // Draw route from driver's current location to delivery (when package collected)
+  Future<void> _drawDriverToDeliveryRoute() async {
+    print('🗺️ _drawDriverToDeliveryRoute called');
+    print('🗺️ _driverLocation: ${_driverLocation != null ? '(${_driverLocation!.lat}, ${_driverLocation!.lng})' : 'null'}');
+    print('🗺️ _deliveryLocation: ${_deliveryLocation != null ? '(${_deliveryLocation!.lat}, ${_deliveryLocation!.lng})' : 'null'}');
+    
+    if (_driverLocation == null || _deliveryLocation == null) {
+      print('❌ Missing driver or delivery location for Driver → Delivery route');
+      print('   - Driver location: ${_driverLocation == null ? 'MISSING' : 'available'}');
+      print('   - Delivery location: ${_deliveryLocation == null ? 'MISSING' : 'available'}');
+      return;
+    }
+    
+    try {
+      print('🗺️ Drawing Driver → Delivery route (package collected)');
+      print('🗺️ Route coordinates: (${_driverLocation!.lat}, ${_driverLocation!.lng}) → (${_deliveryLocation!.lat}, ${_deliveryLocation!.lng})');
+      
+      // Check if traffic segments are available (from tracking screen)
+      if (widget.trafficSegments != null && widget.trafficSegments!.isNotEmpty) {
+        print('🚦 Using traffic-aware polylines for Driver → Delivery route');
+        await _createTrafficPolylines(widget.trafficSegments!, 'Driver → Delivery (Traffic)');
+        
+        // Calculate distance from traffic segments
+        double totalDistance = 0.0;
+        for (final segment in widget.trafficSegments!) {
+          final distance = segment['distance'] as num?;
+          if (distance != null) {
+            totalDistance += distance.toDouble();
+          }
+        }
+        
+        // Convert meters to kilometers
+        final distanceKm = totalDistance / 1000.0;
+        final estimatedMinutes = _estimateDeliveryTime(distanceKm, isToPickup: false);
+        widget.onRouteCalculated?.call(distanceKm, estimatedMinutes);
+        
+        print('✅ Traffic route created: ${distanceKm.toStringAsFixed(1)}km, ${estimatedMinutes.toStringAsFixed(0)} min');
+      } else {
+        // Fallback to simple polyline if no traffic data
+        print('🗺️ Using simple polyline for Driver → Delivery (no traffic data)');
+        final route = await MapboxService.getRoute(
+          _driverLocation!.lat.toDouble(), _driverLocation!.lng.toDouble(),
+          _deliveryLocation!.lat.toDouble(), _deliveryLocation!.lng.toDouble()
+        );
+        
+        if (route != null) {
+          // Use DoorDash-style delivery purple
+          await _createPolyline(route, const Color(0xFF8B5CF6), 'Driver → Delivery');
+          
+          // Calculate and report ETA
+          final distance = _calculateRouteDistance(route);
+          final estimatedMinutes = _estimateDeliveryTime(distance, isToPickup: false);
+          widget.onRouteCalculated?.call(distance, estimatedMinutes);
+        }
+      }
+    } catch (e) {
+      print('❌ Error drawing driver to delivery route: $e');
+    }
+  }
+
   // Draw route preview for location selection (Pickup → Delivery preview)
   Future<void> _drawRoutePreview() async {
     // Handle multi-stop mode
@@ -792,22 +1192,45 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     try {
       print('🗺️ Drawing route preview: Pickup → Delivery');
       
-      // Get route from pickup location to delivery destination
-      final route = await MapboxService.getRoute(
-        _pickupLocation!.lat.toDouble(), _pickupLocation!.lng.toDouble(),
-        _deliveryLocation!.lat.toDouble(), _deliveryLocation!.lng.toDouble()
-      );
-      
-      if (route != null) {
-        // Use a distinctive color for route preview (green for preview)
-        await _createPolyline(route, Colors.green, 'Route Preview');
+      // Check if traffic segments are available (from Matrix API)
+      if (widget.trafficSegments != null && widget.trafficSegments!.isNotEmpty) {
+        print('🚦 Using traffic-aware polylines for route preview');
+        await _createTrafficPolylines(widget.trafficSegments!, 'Route Preview (Traffic)');
         
-        // Calculate and report route info for location selection
-        final distance = _calculateRouteDistance(route);
-        final estimatedMinutes = _estimateDeliveryTime(distance, isToPickup: false);
-        widget.onRouteCalculated?.call(distance, estimatedMinutes);
+        // Calculate distance from traffic segments
+        double totalDistance = 0.0;
+        for (final segment in widget.trafficSegments!) {
+          final distance = segment['distance'] as num?;
+          if (distance != null) {
+            totalDistance += distance.toDouble();
+          }
+        }
         
-        print('✅ Route preview created: ${distance.toStringAsFixed(1)}km, ${estimatedMinutes.toStringAsFixed(0)} min');
+        // Convert meters to kilometers
+        final distanceKm = totalDistance / 1000.0;
+        final estimatedMinutes = _estimateDeliveryTime(distanceKm, isToPickup: false);
+        widget.onRouteCalculated?.call(distanceKm, estimatedMinutes);
+        
+        print('✅ Traffic route preview created: ${distanceKm.toStringAsFixed(1)}km, ${estimatedMinutes.toStringAsFixed(0)} min');
+      } else {
+        // Fallback to simple polyline if no traffic data
+        print('🗺️ Using simple polyline for route preview (no traffic data)');
+        final route = await MapboxService.getRoute(
+          _pickupLocation!.lat.toDouble(), _pickupLocation!.lng.toDouble(),
+          _deliveryLocation!.lat.toDouble(), _deliveryLocation!.lng.toDouble()
+        );
+        
+        if (route != null) {
+          // Use a distinctive color for route preview (green for preview)
+          await _createPolyline(route, Colors.green, 'Route Preview');
+          
+          // Calculate and report route info for location selection
+          final distance = _calculateRouteDistance(route);
+          final estimatedMinutes = _estimateDeliveryTime(distance, isToPickup: false);
+          widget.onRouteCalculated?.call(distance, estimatedMinutes);
+          
+          print('✅ Route preview created: ${distance.toStringAsFixed(1)}km, ${estimatedMinutes.toStringAsFixed(0)} min');
+        }
       }
     } catch (e) {
       print('❌ Error drawing route preview: $e');
@@ -839,19 +1262,11 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
         debugPrint('            Lat: ${stop['latitude']}, Lng: ${stop['longitude']}');
       }
       
-      // Clear old multi-stop markers
-      debugPrint('🧹 Clearing old multi-stop markers...');
-      for (final markerList in _multiStopMarkerCircles) {
-        for (final marker in markerList) {
-          try {
-            await _circleAnnotationManager!.delete(marker);
-          } catch (e) {
-            // Marker might already be deleted
-          }
-        }
-      }
-      _multiStopMarkerCircles.clear();
-      debugPrint('✅ Old markers cleared');
+      // 🧹 Use centralized clearing methods
+      debugPrint('🧹 Clearing old multi-stop markers and polylines...');
+      await clearMultiStopMarkers();
+      await clearAllPolylines();
+      debugPrint('✅ Old markers and polylines cleared');
       
       // 🔧 CRITICAL FIX: Build complete waypoints list including main delivery + additional stops
       List<Map<String, dynamic>> allWaypoints = [];
@@ -1002,17 +1417,17 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
         
         // � NEON BLUE CORE - Unaffected by dark map lighting!
         lineColor: 0xFF00BFFF,         // � Deep Sky Blue - Bright neon blue
-        lineWidth: 4.0,                // 📏 Thinner, cleaner line
+        lineWidth: 2.5,                // 📏 Thinner line
         lineOpacity: 1.0,              // 🔥 Full opacity
         lineSortKey: 999999.0,         // 🚀 MAXIMUM Z-INDEX - Force above ALL map layers
         lineBlur: 0.0,                 // Sharp, crisp core
         
         // ⚪ WHITE BORDER - Creates contrast separation from dark map
         lineBorderColor: 0xFFFFFFFF,   // Pure white border
-        lineBorderWidth: 1.5,          // Thinner border
+        lineBorderWidth: 1.0,          // Thinner border
         
         // 🎯 GAP WIDTH - Creates layered casing effect (outline)
-        lineGapWidth: 0.5,             // Subtle gap
+        lineGapWidth: 0.3,             // Smaller gap
       );
       
       debugPrint('🔨 Creating polyline annotation...');
@@ -1028,11 +1443,16 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       debugPrint('🎨 ═══════════════════════════════════════════════');
       debugPrint('');
       
-      // 📐 AUTO-FIT: Adjust camera to show complete route after drawing
-      if (_pickupLocation != null && _deliveryLocation != null && routePositions.length >= 2) {
+      // IMPORTANT: Mark polyline as existing so future updates work correctly
+      _polylineExists = true;
+      
+      // 📐 AUTO-FIT: Adjust camera to show complete route (only if user hasn't interacted recently)
+      if (!_hasUserInteractedWithCamera && _pickupLocation != null && _deliveryLocation != null && routePositions.length >= 2) {
         debugPrint('📷 Auto-fitting camera to show route...');
         await _fitRouteInView(routePositions);
         debugPrint('✅ Camera fitted');
+      } else if (_hasUserInteractedWithCamera) {
+        debugPrint('⏭️ Skipping camera auto-fit - user has interacted with map');
       }
     } catch (e, stackTrace) {
       debugPrint('❌❌❌ ERROR creating $label polyline!');
@@ -1041,6 +1461,183 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       debugPrint(stackTrace.toString());
       debugPrint('🎨 ═══════════════════════════════════════════════');
       debugPrint('');
+    }
+  }
+
+  // Create traffic-aware polylines using GeoJSON source and LineLayer (Mapbox best practice)
+  Future<void> _createTrafficPolylines(List<Map<String, dynamic>> trafficSegments, String label) async {
+    try {
+      if (_mapboxMap == null) {
+        print('❌ Mapbox map not initialized');
+        return;
+      }
+      
+      print('🚦 ═══════════════════════════════════════════════');
+      print('🚦 Creating traffic route using GeoJSON + LineLayer');
+      print('🚦 Total segments: ${trafficSegments.length}');
+      print('🚦 ═══════════════════════════════════════════════');
+      
+      // Step 1: Remove existing traffic layers and sources if they exist
+      try {
+        await _mapboxMap!.style.removeStyleLayer('traffic-route-layer');
+        print('  ✅ Removed old traffic layer');
+      } catch (e) {
+        print('  ℹ️ No existing traffic layer to remove');
+      }
+      
+      try {
+        await _mapboxMap!.style.removeStyleSource('traffic-route-source');
+        print('  ✅ Removed old traffic source');
+      } catch (e) {
+        print('  ℹ️ No existing traffic source to remove');
+      }
+      
+      // Step 2: Build GeoJSON FeatureCollection with traffic segments
+      // Each segment will have a 'congestion' property for color mapping
+      final List<Map<String, dynamic>> features = [];
+      
+      for (int i = 0; i < trafficSegments.length; i++) {
+        final segment = trafficSegments[i];
+        final coordinates = segment['coordinates'] as List<dynamic>;
+        final congestion = segment['congestion'] as String? ?? 'unknown';
+        
+        // Convert coordinates to GeoJSON format [lng, lat]
+        final geoJsonCoords = coordinates.map((coord) {
+          return [
+            (coord['lng'] as num).toDouble(),
+            (coord['lat'] as num).toDouble(),
+          ];
+        }).toList();
+        
+        // Create a LineString feature for this segment
+        features.add({
+          'type': 'Feature',
+          'geometry': {
+            'type': 'LineString',
+            'coordinates': geoJsonCoords,
+          },
+          'properties': {
+            'congestion': congestion,
+            'segment_index': i,
+          },
+        });
+      }
+      
+      // Build complete GeoJSON FeatureCollection
+      final geoJson = {
+        'type': 'FeatureCollection',
+        'features': features,
+      };
+      
+      print('📊 GeoJSON created with ${features.length} features');
+      
+      // Step 3: Add GeoJSON source to map
+      await _mapboxMap!.style.addSource(GeoJsonSource(
+        id: 'traffic-route-source',
+        data: json.encode(geoJson),
+        lineMetrics: true, // 🎬 ENABLE line metrics for trim animation!
+      ));
+      print('  ✅ Added GeoJSON source (with line metrics for animation)');
+      
+      // Step 4: Add LineLayer with color expression based on congestion property
+      // This is the key - using Mapbox expressions for dynamic styling!
+      await _mapboxMap!.style.addLayer(LineLayer(
+        id: 'traffic-route-layer',
+        sourceId: 'traffic-route-source',
+        
+        // Line width (can vary by zoom level like in Mapbox example)
+        lineWidth: 5.0,
+        
+        // Line color - use match expression to map congestion levels to colors
+        lineColorExpression: [
+          'match',
+          ['get', 'congestion'],
+          'low', 0xFF00E5FF,       // Cyan - light traffic
+          'moderate', 0xFFFFD700,  // Yellow - moderate traffic
+          'heavy', 0xFFFF8C00,     // Orange - heavy traffic
+          'severe', 0xFFFF0000,    // Red - severe traffic
+          0xFF00BFFF,              // Default blue for unknown
+        ],
+        
+        // Border for better visibility
+        lineBorderColor: 0xFFFFFFFF, // White border
+        lineBorderWidth: 1.5,
+        
+        // Line properties for smooth rendering
+        lineOpacity: 1.0,
+        lineCap: LineCap.ROUND,
+        lineJoin: LineJoin.ROUND,
+        
+        // Visual effects
+        lineBlur: 0.0,
+        lineGapWidth: 0.0,
+        
+        // 🎬 ANIMATION: Line trim offset for animated drawing effect
+        // Start fully hidden [1, 1] and will animate to [0, 1] (fully visible)
+        lineTrimOffset: [1.0, 1.0],
+      ));
+      print('  ✅ Added LineLayer with traffic colors and trim animation');
+      
+      // Apply emissive strength to prevent darkening on dark maps
+      await _mapboxMap!.style.setStyleLayerProperty(
+        'traffic-route-layer',
+        'line-emissive-strength',
+        1.0,
+      );
+      print('  ✅ Applied emissive strength');
+      
+      // IMPORTANT: Mark polyline as existing so future updates work correctly
+      _polylineExists = true;
+      
+      // 🎬 START LINE TRIM ANIMATION - Draw the line from start to finish!
+      _lineTrimController.forward(from: 0.0);
+      print('  🎬 Started line trim animation');
+      
+      print('✅ Traffic route created using GeoJSON + LineLayer!');
+      print('🚦 ═══════════════════════════════════════════════');
+      
+    } catch (e, stackTrace) {
+      print('❌ Error creating traffic polylines: $e');
+      print('Stack trace: $stackTrace');
+    }
+  }
+  
+  /// 🎬 Updates the line trim offset during animation
+  /// This creates the "drawing" effect as the line appears from start to finish
+  void _updateLineTrimOffset() async {
+    if (_mapboxMap == null || _lineTrimAnimation == null) return;
+    
+    try {
+      // Calculate trim offset based on animation progress
+      // Animation goes from 0.0 → 1.0
+      // Trim offset needs to go from [1, 1] (hidden) → [0, 1] (fully visible)
+      final progress = _lineTrimAnimation!.value;
+      final trimStart = 1.0 - progress; // 1.0 → 0.0
+      
+      // Update the line trim offset property
+      await _mapboxMap!.style.setStyleLayerProperty(
+        'traffic-route-layer',
+        'line-trim-offset',
+        [trimStart, 1.0],
+      );
+    } catch (e) {
+      // Silently fail if layer doesn't exist (might be removed during animation)
+    }
+  }
+  
+  // Get color based on traffic congestion level
+  int _getTrafficColor(String? congestion) {
+    switch (congestion) {
+      case 'low':
+        return 0xFF00E5FF; // Bright Cyan - Light traffic
+      case 'moderate':
+        return 0xFFFFD700; // Bright Yellow - Moderate traffic
+      case 'heavy':
+        return 0xFFFF8C00; // Bright Orange - Heavy traffic
+      case 'severe':
+        return 0xFFFF0000; // Bright Red - Severe traffic
+      default:
+        return 0xFF00BFFF; // Default bright blue for unknown
     }
   }
 
@@ -1170,113 +1767,6 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
   }
 
   // Calculate if driver is nearby for pulsing effect
-  bool _isDriverNearby() {
-    if (_driverLocation == null || _pickupLocation == null) return false;
-    
-    final distanceToPickup = _calculateDistance(
-      _driverLocation!.lat.toDouble(),
-      _driverLocation!.lng.toDouble(),
-      _pickupLocation!.lat.toDouble(),
-      _pickupLocation!.lng.toDouble(),
-    );
-    
-    return distanceToPickup < 1.0; // Within 1km
-  }
-
-  // Update driver marker with pulsing when nearby
-  Future<void> _updateDriverMarkerWithPulsing() async {
-    if (_circleAnnotationManager == null || _driverLocation == null) return;
-
-    try {
-      // Clear existing driver markers
-      for (final circle in _driverMarkerCircles) {
-        try {
-          await _circleAnnotationManager!.delete(circle);
-        } catch (e) {
-          // Ignore deletion errors
-        }
-      }
-      _driverMarkerCircles.clear();
-
-      final bool isNearby = _isDriverNearby();
-      print('🚗 Driver marker update (nearby: $isNearby)');
-
-      // DoorDash-inspired driver colors
-      const driverOrange = Color(0xFFFF6B35); // Orange for driver
-      const driverGreen = Color(0xFF00D68F); // Green when nearby
-      final markerColor = isNearby ? driverGreen : driverOrange;
-
-      // Add pulsing effect when driver is nearby
-      if (isNearby) {
-        // Outer pulse ring (animated effect)
-        final outerPulse = await _circleAnnotationManager!.create(
-          CircleAnnotationOptions(
-            geometry: Point(coordinates: _driverLocation!),
-            circleRadius: 50.0,
-            circleColor: driverGreen.withOpacity(0.2).value,
-            circleBlur: 2.0,
-          ),
-        );
-        _driverMarkerCircles.add(outerPulse);
-
-        // Middle pulse ring
-        final middlePulse = await _circleAnnotationManager!.create(
-          CircleAnnotationOptions(
-            geometry: Point(coordinates: _driverLocation!),
-            circleRadius: 35.0,
-            circleColor: driverGreen.withOpacity(0.3).value,
-            circleBlur: 1.5,
-          ),
-        );
-        _driverMarkerCircles.add(middlePulse);
-      }
-
-      // Create subtle drop shadow for depth
-      final shadowMarker = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: Position(_driverLocation!.lng + 0.00002, _driverLocation!.lat - 0.00002)),
-          circleRadius: 18.0,
-          circleColor: const Color(0x1A000000).value,
-        ),
-      );
-      _driverMarkerCircles.add(shadowMarker);
-
-      // Create outer white ring (clean outline)
-      final outerRing = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _driverLocation!),
-          circleRadius: 20.0,
-          circleColor: Colors.white.value,
-        ),
-      );
-      _driverMarkerCircles.add(outerRing);
-
-      // Create main driver circle
-      final mainMarker = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _driverLocation!),
-          circleRadius: 16.0,
-          circleColor: markerColor.value,
-        ),
-      );
-      _driverMarkerCircles.add(mainMarker);
-
-      // Create inner white core (directional indicator)
-      final innerCore = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _driverLocation!),
-          circleRadius: 6.0,
-          circleColor: Colors.white.value,
-        ),
-      );
-      _driverMarkerCircles.add(innerCore);
-
-      print('✅ Driver marker created with ${isNearby ? 'GREEN PULSING' : 'orange color'}');
-    } catch (e) {
-      print('❌ Error updating driver marker: $e');
-    }
-  }
-
   // Load vehicle icons (placeholder for future SVG implementation)
   Future<void> _loadVehicleIcons() async {
     if (_mapboxMap == null || _vehicleIconsLoaded) return;
@@ -1298,7 +1788,7 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
   // Get vehicle icon name for map marker
 
 
-  // Create vehicle-specific marker with pulsing when nearby
+  // Create vehicle-specific marker with profile picture or fallback to Mapbox default
   Future<void> _createEnhancedVehicleMarker() async {
     debugPrint('🚗 _createEnhancedVehicleMarker called for delivery tracking');
     debugPrint('🚗 _driverLocation: $_driverLocation');
@@ -1308,100 +1798,121 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       return;
     }
 
+    // Clear existing driver markers first
+    for (final circle in _driverMarkerCircles) {
+      try {
+        await _circleAnnotationManager?.delete(circle);
+      } catch (e) {
+        // Ignore deletion errors
+      }
+    }
+    _driverMarkerCircles.clear();
+
+    // Try to use profile picture if available
+    if (widget.driverProfilePictureUrl != null && 
+        widget.driverProfilePictureUrl!.isNotEmpty &&
+        widget.driverId != null) {
+      debugPrint('� Attempting to use driver profile picture: ${widget.driverProfilePictureUrl}');
+      
+      // 🔧 PERFORMANCE: Check if we already know this URL fails
+      if (_lastAttemptedProfileUrl == widget.driverProfilePictureUrl && _profilePictureDownloadFailed) {
+        debugPrint('⏭️ Skipping profile picture - known failure');
+      } else {
+        _lastAttemptedProfileUrl = widget.driverProfilePictureUrl;
+        
+        final success = await _createProfilePictureMarker();
+        if (success) {
+          debugPrint('✅ Driver profile picture marker created successfully!');
+          _profilePictureDownloadFailed = false;
+          return;
+        } else {
+          debugPrint('⚠️ Profile picture marker failed, using Mapbox default');
+          _profilePictureDownloadFailed = true;
+        }
+      }
+    } else {
+      debugPrint('ℹ️ No profile picture URL available, using Mapbox default marker');
+    }
+
+    // Fallback: Use Mapbox's built-in location puck
+    await _createMapboxDefaultMarker();
+  }
+
+  /// Create driver marker using profile picture (circular with border)
+  Future<bool> _createProfilePictureMarker() async {
     try {
-      final vehicleType = widget.driverVehicleType ?? 'sedan';
-      debugPrint('🚗 Creating driver marker for: $vehicleType');
-      debugPrint('🚗 Driver position: lat=${_driverLocation!.lat}, lng=${_driverLocation!.lng}');
-      
-      // Use enhanced marker with pulsing effect when nearby
-      await _updateDriverMarkerWithPulsing();
-      
-      debugPrint('✅ Driver marker updated successfully!');
-    } catch (e) {
-      debugPrint('❌ Error creating vehicle marker: $e');
-      // Fallback to basic circle marker if enhancement fails
-      await _createFallbackVehicleMarker();
+      if (_pointAnnotationManager == null || _driverLocation == null) {
+        return false;
+      }
+
+      // Download and process profile picture
+      final markerImage = await DriverMarkerService.createDriverMarker(
+        profilePictureUrl: widget.driverProfilePictureUrl!,
+        driverId: widget.driverId!,
+        size: 120, // Increased size for better visibility
+        borderWidth: 5,
+        borderColor: Colors.white,
+      );
+
+      if (markerImage == null) {
+        debugPrint('❌ Failed to create marker image from profile picture');
+        return false;
+      }
+
+      debugPrint('📍 Creating PointAnnotation with profile picture (${markerImage.length} bytes)');
+
+      // Delete old driver marker if exists
+      if (_driverMarker != null) {
+        await _pointAnnotationManager!.delete(_driverMarker!);
+        _driverMarker = null;
+      }
+
+      // Create point annotation with profile picture
+      _driverMarker = await _pointAnnotationManager!.create(
+        PointAnnotationOptions(
+          geometry: Point(coordinates: _driverLocation!),
+          image: markerImage,
+          iconSize: 1.0, // Keep at 1.0 for consistent zoom-independent size
+          iconAnchor: IconAnchor.CENTER, // Center anchor for circular marker
+        ),
+      );
+
+      debugPrint('✅ Profile picture marker created at (${_driverLocation!.lat}, ${_driverLocation!.lng})');
+      return true;
+    } catch (e, stackTrace) {
+      debugPrint('❌ Error creating profile picture marker: $e');
+      debugPrint('Stack trace: $stackTrace');
+      return false;
     }
   }
 
-  // Create DoorDash-style driver marker (clean, no animation)
-  Future<void> _createFallbackVehicleMarker() async {
-    if (_circleAnnotationManager == null || _driverLocation == null) return;
-    
+  /// Create simple circle marker as fallback (when no profile picture)
+  Future<void> _createMapboxDefaultMarker() async {
     try {
-      // DoorDash-inspired color scheme
-      const driverBlue = Color(0xFF0073E6); // DoorDash blue
-      const shadowColor = Color(0x1A000000); // Subtle shadow
-      
-      // Create subtle drop shadow for depth (DoorDash style)
-      final shadowMarker = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: Position(_driverLocation!.lng + 0.00002, _driverLocation!.lat - 0.00002)),
-          circleRadius: 18.0,
-          circleColor: shadowColor.value,
-        ),
-      );
-      
-      // Create outer white ring (clean outline)
-      final outerRing = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
+      if (_pointAnnotationManager == null || _driverLocation == null) return;
+
+      debugPrint('🚗 Creating driver marker without profile picture...');
+
+      // Generate custom driver icon with car symbol
+      final driverIcon = await MapMarkerService.createDriverMarker(size: 80);
+
+      // Create point annotation with custom icon
+      _driverMarker = await _pointAnnotationManager!.create(
+        PointAnnotationOptions(
           geometry: Point(coordinates: _driverLocation!),
-          circleRadius: 17.0,
-          circleColor: Colors.white.value,
+          image: driverIcon,
+          iconSize: 1.0, // Keep at 1.0 for consistent size
+          iconAnchor: IconAnchor.CENTER, // Center anchor for circular marker
         ),
       );
-      
-      // Create main driver circle (vibrant blue)
-      final mainMarker = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _driverLocation!),
-          circleRadius: 14.0,
-          circleColor: driverBlue.value,
-        ),
-      );
-      
-      // Create inner white car icon representation
-      final carIcon = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _driverLocation!),
-          circleRadius: 6.0,
-          circleColor: Colors.white.value,
-        ),
-      );
-      
-      // Add directional indicator (small arrow-like shape using offset circles)
-      final directionDot1 = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: Position(_driverLocation!.lng, _driverLocation!.lat + 0.00003)),
-          circleRadius: 2.0,
-          circleColor: driverBlue.value,
-        ),
-      );
-      
-      final directionDot2 = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: Position(_driverLocation!.lng - 0.00002, _driverLocation!.lat + 0.00002)),
-          circleRadius: 1.5,
-          circleColor: driverBlue.value,
-        ),
-      );
-      
-      final directionDot3 = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: Position(_driverLocation!.lng + 0.00002, _driverLocation!.lat + 0.00002)),
-          circleRadius: 1.5,
-          circleColor: driverBlue.value,
-        ),
-      );
-      
-      _driverMarkerCircles.addAll([shadowMarker, outerRing, mainMarker, carIcon, directionDot1, directionDot2, directionDot3]);
-      
-      debugPrint('✅ DoorDash-style ${widget.driverVehicleType} marker created');
+
+      debugPrint('✅ Driver marker created at (${_driverLocation!.lat}, ${_driverLocation!.lng})');
     } catch (e) {
-      debugPrint('❌ Error creating DoorDash marker: $e');
+      debugPrint('❌ Error creating driver marker: $e');
     }
   }
 
+  /// Deprecated: Old circle-based marker method
   // Estimate delivery time based on distance and phase
   double _estimateDeliveryTime(double distanceKm, {required bool isToPickup}) {
     // Base speed assumptions (km/h)
@@ -1489,7 +2000,7 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     }
   }
 
-  void _updateMapCamera(double lat, double lng) async {
+  void _updateMapCamera(double lat, double lng, {double? zoom}) async {
     if (_mapboxMap == null) return;
     
     // Don't adjust camera if user has interacted recently
@@ -1501,10 +2012,11 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       }
     }
     
+    debugPrint('📍 Zooming to location: $lat, $lng (zoom: ${zoom ?? 16.0})');
     await _mapboxMap!.setCamera(
       CameraOptions(
         center: Point(coordinates: Position(lng, lat)),
-        zoom: 15.0,
+        zoom: zoom ?? 16.0,  // Use 16.0 for better zoom on single locations
         pitch: 20.0,    // SUBTLE 3D: Maintain subtle tilt when focusing on locations
         bearing: 0.0,   // Keep north-up orientation
       ),
@@ -1581,267 +2093,190 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
               ),
             ),
           ),
-        
-          // Map interaction instructions - FLOATING OVERLAY 🌙 DARK GLASSMORPHISM
-          Positioned(
-            top: 16,
-            left: 16,
-            right: 16,
-            child: Semantics(
-              label: 'Map instructions. Tap on map to set pickup and delivery locations',
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1A1A1A).withOpacity(0.85), // 🌙 Dark glass background
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.1), // 🌙 Subtle border
-                    width: 1,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.3),
-                      blurRadius: 16,
-                      offset: const Offset(0, 4),
-                    ),
-                    BoxShadow(
-                      color: const Color(0xFF00F0FF).withOpacity(0.05), // 🌊 Subtle neon glow
-                      blurRadius: 24,
-                      spreadRadius: -4,
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            const Color(0xFF00F0FF).withOpacity(0.2), // 🌊 Neon cyan
-                            const Color(0xFF0080FF).withOpacity(0.15), // 🌊 Blue glow
-                          ],
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Icon(
-                        Icons.touch_app,
-                        color: Color(0xFF00F0FF), // 🌊 Neon cyan icon
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text(
-                            'Tap to set locations',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white, // 🌙 White text for dark theme
-                            ),
-                          ),
-                          Text(
-                            'Auto-fills address fields below',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.white.withOpacity(0.6), // 🌙 Dimmed white
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        
-        // Location status indicators - BOTTOM FLOATING 🌙 DARK GLASSMORPHISM
-        if (_pickupLocation != null || _deliveryLocation != null)
-          Positioned(
-            bottom: 16,
-            left: 16,
-            right: 16,
-            child: Semantics(
-              label: '${_pickupLocation != null ? 'Pickup location set. ' : ''}${_deliveryLocation != null ? 'Delivery location set. ' : ''}${_pickupLocation != null && _deliveryLocation != null ? 'Route ready for navigation.' : ''}',
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1A1A1A).withOpacity(0.85), // 🌙 Dark glass background
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.1), // 🌙 Subtle border
-                    width: 1,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.3),
-                      blurRadius: 16,
-                      offset: const Offset(0, 4),
-                    ),
-                    BoxShadow(
-                      color: const Color(0xFF00F0FF).withOpacity(0.05), // 🌊 Subtle neon glow
-                      blurRadius: 24,
-                      spreadRadius: -4,
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    if (_pickupLocation != null) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [
-                              const Color(0xFF00FF88).withOpacity(0.2), // 🟢 Bright green
-                              const Color(0xFF00CC66).withOpacity(0.15),
-                            ],
-                          ),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(
-                            color: const Color(0xFF00FF88).withOpacity(0.3),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: const BoxDecoration(
-                                color: Color(0xFF00FF88), // 🟢 Bright neon green
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Color(0xFF00FF88),
-                                    blurRadius: 4,
-                                    spreadRadius: 1,
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            const Text(
-                              'Pickup',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: Color(0xFF00FF88), // 🟢 Neon green
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                    if (_pickupLocation != null && _deliveryLocation != null)
-                      const SizedBox(width: 8),
-                    if (_deliveryLocation != null) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [
-                              const Color(0xFFFF0066).withOpacity(0.2), // 🔴 Bright red
-                              const Color(0xFFCC0055).withOpacity(0.15),
-                            ],
-                          ),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(
-                            color: const Color(0xFFFF0066).withOpacity(0.3),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: const BoxDecoration(
-                                color: Color(0xFFFF0066), // 🔴 Bright neon red
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Color(0xFFFF0066),
-                                    blurRadius: 4,
-                                    spreadRadius: 1,
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            const Text(
-                              'Delivery',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: Color(0xFFFF0066), // 🔴 Neon red
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                    const Spacer(),
-                    if (_pickupLocation != null && _deliveryLocation != null) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [
-                              Color(0xFF00F0FF), // 🌊 Neon cyan
-                              Color(0xFF0080FF), // 🌊 Blue
-                            ],
-                          ),
-                          borderRadius: BorderRadius.circular(8),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF00F0FF).withOpacity(0.3),
-                              blurRadius: 8,
-                              spreadRadius: 1,
-                            ),
-                          ],
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.check_circle,
-                              size: 16,
-                              color: Colors.white,
-                            ),
-                            SizedBox(width: 6),
-                            Text(
-                              'Route ready',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );
   }
 
+  // 🧹 CENTRALIZED CLEARING METHODS
+  
+  /// Clear all pickup and delivery markers
+  Future<void> clearPickupDeliveryMarkers() async {
+    debugPrint('🧹 Clearing pickup and delivery markers...');
+    
+    // Clear pickup marker
+    if (_pickupMarker != null && _pointAnnotationManager != null) {
+      try {
+        await _pointAnnotationManager!.delete(_pickupMarker!);
+        _pickupMarker = null;
+        debugPrint('  ✅ Pickup marker cleared');
+      } catch (e) {
+        debugPrint('  ⚠️ Error clearing pickup marker: $e');
+      }
+    }
+    
+    // Clear pickup circles
+    for (final circle in _pickupMarkerCircles) {
+      try {
+        await _circleAnnotationManager?.delete(circle);
+      } catch (e) {}
+    }
+    _pickupMarkerCircles.clear();
+    _pickupMarkerExists = false;
+    
+    // Clear delivery marker
+    if (_deliveryMarker != null && _pointAnnotationManager != null) {
+      try {
+        await _pointAnnotationManager!.delete(_deliveryMarker!);
+        _deliveryMarker = null;
+        debugPrint('  ✅ Delivery marker cleared');
+      } catch (e) {
+        debugPrint('  ⚠️ Error clearing delivery marker: $e');
+      }
+    }
+    
+    // Clear delivery circles
+    for (final circle in _dropoffMarkerCircles) {
+      try {
+        await _circleAnnotationManager?.delete(circle);
+      } catch (e) {}
+    }
+    _dropoffMarkerCircles.clear();
+    _deliveryMarkerExists = false;
+    
+    debugPrint('🧹 Pickup and delivery markers cleared');
+  }
+  
+  /// Clear all multi-stop markers and labels
+  Future<void> clearMultiStopMarkers() async {
+    debugPrint('🧹 Clearing multi-stop markers...');
+    
+    // Clear circle markers
+    for (final markerList in _multiStopMarkerCircles) {
+      for (final marker in markerList) {
+        try {
+          await _circleAnnotationManager?.delete(marker);
+        } catch (e) {}
+      }
+    }
+    _multiStopMarkerCircles.clear();
+    
+    // Clear stop number annotations (text labels)
+    if (_stopNumberAnnotationManager != null) {
+      try {
+        await _stopNumberAnnotationManager!.deleteAll();
+        debugPrint('  ✅ All stop number labels cleared');
+      } catch (e) {
+        debugPrint('  ⚠️ Error clearing stop numbers: $e');
+      }
+    }
+    
+    debugPrint('🧹 Multi-stop markers cleared');
+  }
+  
+  /// Clear all polylines
+  Future<void> clearAllPolylines() async {
+    debugPrint('🧹 Clearing all polylines...');
+    
+    // Clear PolylineAnnotations (old method)
+    if (_polylineAnnotationManager != null) {
+      try {
+        await _polylineAnnotationManager!.deleteAll();
+        debugPrint('  ✅ All polyline annotations cleared');
+      } catch (e) {
+        debugPrint('  ⚠️ Error clearing polyline annotations: $e');
+      }
+    }
+    
+    // Clear GeoJSON-based traffic route (new method)
+    if (_mapboxMap != null) {
+      try {
+        await _mapboxMap!.style.removeStyleLayer('traffic-route-layer');
+        debugPrint('  ✅ Removed traffic route layer');
+      } catch (e) {
+        debugPrint('  ℹ️ No traffic layer to remove');
+      }
+      
+      try {
+        await _mapboxMap!.style.removeStyleSource('traffic-route-source');
+        debugPrint('  ✅ Removed traffic route source');
+      } catch (e) {
+        debugPrint('  ℹ️ No traffic source to remove');
+      }
+    }
+    
+    _polylineExists = false;
+    debugPrint('🧹 Polylines cleared');
+  }
+  
+  /// Clear all markers (pickup, delivery, multi-stop, driver)
+  Future<void> clearAllMarkers() async {
+    debugPrint('🧹 Clearing ALL markers...');
+    
+    await clearPickupDeliveryMarkers();
+    await clearMultiStopMarkers();
+    
+    // Clear driver marker
+    if (_driverMarker != null && _pointAnnotationManager != null) {
+      try {
+        await _pointAnnotationManager!.delete(_driverMarker!);
+        _driverMarker = null;
+        debugPrint('  ✅ Driver marker cleared');
+      } catch (e) {
+        debugPrint('  ⚠️ Error clearing driver marker: $e');
+      }
+    }
+    
+    // Clear driver circles
+    for (final circle in _driverMarkerCircles) {
+      try {
+        await _circleAnnotationManager?.delete(circle);
+      } catch (e) {}
+    }
+    _driverMarkerCircles.clear();
+    _driverMarkerExists = false;
+    
+    debugPrint('🧹 All markers cleared');
+  }
+  
+  /// Switch from single-stop to multi-stop mode (or vice versa)
+  Future<void> switchDeliveryMode({required bool isMultiStop}) async {
+    debugPrint('🔄 Switching delivery mode: ${isMultiStop ? 'MULTI-STOP' : 'SINGLE-STOP'}');
+    
+    // Clear everything first
+    await clearAllPolylines();
+    
+    if (isMultiStop) {
+      // Switching TO multi-stop: clear single delivery marker
+      if (_deliveryMarker != null && _pointAnnotationManager != null) {
+        try {
+          await _pointAnnotationManager!.delete(_deliveryMarker!);
+          _deliveryMarker = null;
+        } catch (e) {}
+      }
+      for (final circle in _dropoffMarkerCircles) {
+        try {
+          await _circleAnnotationManager?.delete(circle);
+        } catch (e) {}
+      }
+      _dropoffMarkerCircles.clear();
+      _deliveryMarkerExists = false;
+    } else {
+      // Switching TO single-stop: clear multi-stop markers
+      await clearMultiStopMarkers();
+    }
+    
+    debugPrint('🔄 Delivery mode switched');
+  }
+
   @override
   void dispose() {
     _pulseController.dispose();
+    _driverAnimationController.dispose();
+    _lineTrimController.dispose(); // 🎬 Dispose line trim animation controller
     _locationSubscription?.cancel();
     _pulseTimer?.cancel();
+    _locationUpdateDebouncer?.cancel(); // 🔧 Cancel debouncer
     
     super.dispose();
   }
@@ -1849,6 +2284,7 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
 
 
   // Start user location tracking
+  // Start user location tracking (kept for permission handling and initial focus)
   Future<void> _startLocationTracking() async {
     try {
       // Check location permissions
@@ -1866,19 +2302,14 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
         return;
       }
 
-      // Start location stream
-      _locationSubscription = geo.Geolocator.getPositionStream(
-        locationSettings: const geo.LocationSettings(
-          accuracy: geo.LocationAccuracy.high,
-          distanceFilter: 10, // Update every 10 meters
-        ),
-      ).listen((geo.Position position) {
-        _updateUserLocation(position);
-      });
-
-      // Get initial location
+      // 🎯 Native location puck automatically tracks user location
+      // We just need to get initial position for auto-focus
       final position = await geo.Geolocator.getCurrentPosition();
-      _updateUserLocation(position);
+      _userLocation = position;
+      
+      print('✅ User location obtained: ${position.latitude}, ${position.longitude}');
+      print('🎯 Native location puck will automatically track user movement');
+      
     } catch (e) {
       print('Error starting location tracking: $e');
     }
@@ -1886,13 +2317,17 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
 
   // Update user location marker
   void _updateUserLocation(geo.Position position) {
-    setState(() {
-      _userLocation = position;
-    });
+    // Don't use setState here to avoid triggering a full rebuild
+    // which would clear polylines/markers
+    _userLocation = position;
 
-    if (_mapboxMap != null && _circleAnnotationManager != null) {
-      _updateUserLocationMarker(position);
-    }
+    // 🎯 Native location puck handles user location display automatically
+    // No need to manually update markers anymore!
+    // The Mapbox location component tracks GPS and updates the puck automatically
+    
+    // if (_mapboxMap != null && _circleAnnotationManager != null) {
+    //   _updateUserLocationMarker(position);
+    // }
   }
 
 
@@ -1902,20 +2337,37 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     try {
       // 🧹 CLEANUP: Remove ALL existing user location markers (prevents duplicates)
       if (_userLocationMarkerCircles.isNotEmpty) {
-        for (final circle in _userLocationMarkerCircles) {
-          await _circleAnnotationManager!.delete(circle);
+        final circlesToDelete = List.from(_userLocationMarkerCircles);
+        _userLocationMarkerCircles.clear(); // Clear list first to prevent issues
+        
+        int deletedCount = 0;
+        for (final circle in circlesToDelete) {
+          try {
+            await _circleAnnotationManager?.delete(circle);
+            deletedCount++;
+          } catch (e) {
+            // Silently ignore - circle may not be on map yet
+            debugPrint('⚠️ Could not delete circle (may not be added yet): ${circle.id}');
+          }
         }
-        _userLocationMarkerCircles.clear();
-        debugPrint('🧹 Cleared ${_userLocationMarkerCircles.length} old user location markers');
+        debugPrint('🧹 Cleared $deletedCount old user location markers');
       }
       
       // Legacy cleanup (backwards compatibility)
       if (_userLocationMarker != null) {
-        await _circleAnnotationManager!.delete(_userLocationMarker!);
+        try {
+          await _circleAnnotationManager?.delete(_userLocationMarker!);
+        } catch (e) {
+          debugPrint('⚠️ Could not delete legacy marker (may not be added yet)');
+        }
         _userLocationMarker = null;
       }
       if (_userLocationAccuracyCircle != null) {
-        await _circleAnnotationManager!.delete(_userLocationAccuracyCircle!);
+        try {
+          await _circleAnnotationManager?.delete(_userLocationAccuracyCircle!);
+        } catch (e) {
+          debugPrint('⚠️ Could not delete legacy accuracy circle (may not be added yet)');
+        }
         _userLocationAccuracyCircle = null;
       }
 
@@ -1926,72 +2378,72 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     }
   }
 
-  // Create DoorDash-style user location marker
+  // Create optimized user location marker (reduced from 10 to 4 circles for performance)
   Future<void> _createDoorDashUserLocationMarker(geo.Position position) async {
     if (_circleAnnotationManager == null) return;
 
     try {
       // DoorDash user location colors
       const userBlue = Color(0xFF007AFF); // iOS blue for user
-      const shadowColor = Color(0x1A000000);
       
-      // Create accuracy circle (subtle, clean)
-      final accuracyCircle = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: Position(position.longitude, position.latitude)),
-          circleRadius: math.min(position.accuracy, 50.0), // Cap accuracy circle size
-          circleColor: userBlue.withOpacity(0.08).value,
-          circleStrokeColor: userBlue.withOpacity(0.15).value,
-          circleStrokeWidth: 1.0,
-        ),
-      );
-      _userLocationMarkerCircles.add(accuracyCircle); // 🧹 Track for cleanup
-      _userLocationAccuracyCircle = accuracyCircle; // Legacy reference
+      final circles = <CircleAnnotationOptions>[];
+      
+      // 1. Create accuracy circle (subtle, clean) - only if accuracy is good
+      if (position.accuracy < 100) {
+        circles.add(
+          CircleAnnotationOptions(
+            geometry: Point(coordinates: Position(position.longitude, position.latitude)),
+            circleRadius: math.min(position.accuracy, 50.0), // Cap accuracy circle size
+            circleColor: userBlue.withOpacity(0.08).value,
+            circleStrokeColor: userBlue.withOpacity(0.15).value,
+            circleStrokeWidth: 1.0,
+          ),
+        );
+      }
 
-      // Create subtle drop shadow
-      final shadowCircle = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: Position(position.longitude + 0.00001, position.latitude - 0.00001)),
-          circleRadius: 12.0,
-          circleColor: shadowColor.value,
-        ),
-      );
-      _userLocationMarkerCircles.add(shadowCircle); // 🧹 Track for cleanup
-
-      // Create outer white ring
-      final whiteRing = await _circleAnnotationManager!.create(
+      // 2. Create outer white ring
+      circles.add(
         CircleAnnotationOptions(
           geometry: Point(coordinates: Position(position.longitude, position.latitude)),
           circleRadius: 11.0,
           circleColor: Colors.white.value,
         ),
       );
-      _userLocationMarkerCircles.add(whiteRing); // 🧹 Track for cleanup
 
-      // Create main user location circle
-      final mainCircle = await _circleAnnotationManager!.create(
+      // 3. Create main user location circle
+      circles.add(
         CircleAnnotationOptions(
           geometry: Point(coordinates: Position(position.longitude, position.latitude)),
           circleRadius: 8.0,
           circleColor: userBlue.value,
         ),
       );
-      _userLocationMarkerCircles.add(mainCircle); // 🧹 Track for cleanup
-      _userLocationMarker = mainCircle; // Legacy reference
 
-      // Create inner white dot (classic design)
-      final innerDot = await _circleAnnotationManager!.create(
+      // 4. Create inner white dot (classic design)
+      circles.add(
         CircleAnnotationOptions(
           geometry: Point(coordinates: Position(position.longitude, position.latitude)),
           circleRadius: 3.0,
           circleColor: Colors.white.value,
         ),
       );
-      _userLocationMarkerCircles.add(innerDot); // 🧹 Track for cleanup
       
-      debugPrint('✅ DoorDash-style user location marker created (${_userLocationMarkerCircles.length} circles)');
+      // Create all circles in a batch for better performance
+      final createdCircles = await _circleAnnotationManager!.createMulti(circles);
+      _userLocationMarkerCircles.addAll(createdCircles.whereType<CircleAnnotation>());
+      
+      // Legacy references
+      final validCircles = createdCircles.whereType<CircleAnnotation>().toList();
+      if (validCircles.length >= 2) {
+        _userLocationMarker = validCircles[validCircles.length - 2]; // Main blue circle
+      }
+      if (position.accuracy < 100 && validCircles.isNotEmpty) {
+        _userLocationAccuracyCircle = validCircles[0]; // Accuracy circle
+      }
+      
+      debugPrint('✅ Optimized user location marker created (${_userLocationMarkerCircles.length} circles)');
     } catch (e) {
-      print('❌ Error creating DoorDash user location marker: $e');
+      print('❌ Error creating user location marker: $e');
     }
   }
 
@@ -2009,11 +2461,16 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       await _updateDropoffMarker();
       
       // Update driver marker (real-time tracking) - only when tracking delivery
-      if (widget.deliveryStatus != null && (widget.driverLatitude != null || widget.driverLongitude != null)) {
+      // 🔧 FIX: Changed || to && - we need BOTH lat AND lng to create a marker
+      if (widget.deliveryStatus != null && widget.driverLatitude != null && widget.driverLongitude != null) {
         debugPrint('🚗 Delivery tracking mode detected, updating driver marker');
         await _updateDriverMarker();
       } else {
-        debugPrint('🚗 Location selection mode - skipping driver marker update');
+        debugPrint('🚗 Location selection mode or missing coordinates - skipping driver marker update');
+        if (widget.deliveryStatus != null) {
+          debugPrint('   - driverLatitude: ${widget.driverLatitude}');
+          debugPrint('   - driverLongitude: ${widget.driverLongitude}');
+        }
       }
       
       // Update route between markers
@@ -2024,13 +2481,58 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       print('Error updating map markers: $e');
     }
   }
+  
+  // 🔧 PERFORMANCE: Individual marker update methods (prevent unnecessary recreation)
+  
+  Future<void> _updatePickupMarkerOnly() async {
+    if (_pointAnnotationManager == null || _pickupLocation == null) return;
+    debugPrint('🟢 Updating ONLY pickup marker');
+    await _updatePickupMarker();
+  }
+  
+  Future<void> _updateDropoffMarkerOnly() async {
+    if (_pointAnnotationManager == null || _deliveryLocation == null) return;
+    debugPrint('🔴 Updating ONLY delivery marker');
+    await _updateDropoffMarker();
+  }
+  
+  Future<void> _updateDriverMarkerOnly() async {
+    if (_pointAnnotationManager == null || _driverLocation == null) return;
+    if (widget.deliveryStatus == null) return;
+    debugPrint('🚗 Updating ONLY driver marker');
+    await _updateDriverMarker();
+  }
+  
+  Future<void> _updateMultiStopMarkers() async {
+    if (_pointAnnotationManager == null) return;
+    debugPrint('🚏 Updating multi-stop markers');
+    
+    // Clear existing multi-stop markers AND polylines
+    await clearMultiStopMarkers();
+    await clearAllPolylines();
+    
+    // Redraw multi-stop route
+    if (widget.isMultiStop && widget.additionalStops != null && widget.additionalStops!.isNotEmpty) {
+      await _drawMultiStopRoute();
+    }
+  }
 
   // Update pickup marker
   Future<void> _updatePickupMarker() async {
     if (_pickupLocation == null) return;
 
     try {
-      // Remove existing pickup marker circles
+      // Delete old pickup point annotation marker
+      if (_pickupMarker != null && _pointAnnotationManager != null) {
+        try {
+          await _pointAnnotationManager!.delete(_pickupMarker!);
+          _pickupMarker = null;
+        } catch (e) {
+          print('Error deleting old pickup marker: $e');
+        }
+      }
+      
+      // Remove existing pickup marker circles (legacy cleanup)
       for (final circle in _pickupMarkerCircles) {
         try {
           await _circleAnnotationManager!.delete(circle);
@@ -2040,7 +2542,7 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       }
       _pickupMarkerCircles.clear();
 
-      // FIXED: Use reliable circle-based marker instead of emoji
+      // Create new pickup marker
       await _createPickupCircleMarker();
       print('Pickup marker created at: ${_pickupLocation!.lat}, ${_pickupLocation!.lng}');
     } catch (e) {
@@ -2048,74 +2550,29 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     }
   }
 
-  // Create neon-glowing pickup marker 🟢 ENHANCED DARK THEME STYLE
+  // Create pickup marker with pin icon 🟢 ZOOM-INDEPENDENT
   Future<void> _createPickupCircleMarker() async {
-    if (_circleAnnotationManager == null || _pickupLocation == null) return;
+    if (_pointAnnotationManager == null || _pickupLocation == null) return;
 
     try {
-      // 🌙 DARK THEME PICKUP MARKER - ENHANCED VISIBILITY
+      debugPrint('🟢 Creating pickup pin marker...');
       
-      // Outer glow ring (wide soft glow) - BRIGHTER
-      final outerGlow = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _pickupLocation!),
-          circleRadius: 35.0,                                           // Larger glow
-          circleColor: const Color(0xFF00FF88).withOpacity(0.4).value,  // 🟢 Brighter neon green
-          circleBlur: 2.0,                                              // More blur for glow
-        ),
-      );
-
-      // Middle glow ring - ENHANCED
-      final middleGlow = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _pickupLocation!),
-          circleRadius: 26.0,
-          circleColor: const Color(0xFF00FF88).withOpacity(0.6).value,
-          circleBlur: 1.5,
-        ),
-      );
-
-      // Main pickup circle with bright neon green - ENHANCED
-      final mainMarker = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _pickupLocation!),
-          circleRadius: 18.0,                                           // Larger
-          circleColor: const Color(0xFF00FF88).value,                   // 🟢 NEON GREEN
-          circleStrokeColor: Colors.white.value,                        // ⚪ WHITE BORDER for contrast
-          circleStrokeWidth: 4.0,                                       // Thicker white border
-          circleOpacity: 1.0,                                           // Full opacity
-        ),
-      );
-
-      // Inner white core (for contrast) - ENHANCED
-      final innerCore = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _pickupLocation!),
-          circleRadius: 8.0,                                            // Larger core
-          circleColor: Colors.white.value,                              // Pure white
-        ),
-      );
-
-      // Pulsing outer ring (animated effect) - ENHANCED
-      final pulseRing = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _pickupLocation!),
-          circleRadius: 22.0,
-          circleColor: Colors.transparent.value,
-          circleStrokeColor: const Color(0xFF00FF88).withOpacity(0.9).value, // Brighter
-          circleStrokeWidth: 3.5,                                       // Thicker pulse
-        ),
-      );
-
-      // Track all circles for cleanup
-      _pickupMarkerCircles.addAll([outerGlow, middleGlow, mainMarker, innerCore, pulseRing]);
+      // Generate custom pickup pin icon (larger size)
+      final pickupIcon = await MapMarkerService.createPickupMarker(size: 120);
       
-      // Apply emissive strength to prevent darkening
-      await _circleAnnotationManager!.setCircleEmissiveStrength(1.0);
+      // Create point annotation with custom icon and track it
+      _pickupMarker = await _pointAnnotationManager!.create(
+        PointAnnotationOptions(
+          geometry: Point(coordinates: _pickupLocation!),
+          image: pickupIcon,
+          iconSize: 1.2, // Larger icon size
+          iconAnchor: IconAnchor.BOTTOM, // Anchor at bottom point of pin
+        ),
+      );
       
-      debugPrint('🟢 Neon pickup marker created with glow effect + emissive strength');
+      debugPrint('✅ Pickup pin marker created at (${_pickupLocation!.lat}, ${_pickupLocation!.lng})');
     } catch (e) {
-      print('Error creating pickup circle marker: $e');
+      print('❌ Error creating pickup pin marker: $e');
     }
   }
 
@@ -2124,7 +2581,17 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     if (_deliveryLocation == null) return;
 
     try {
-      // Remove existing dropoff marker circles
+      // Delete old delivery point annotation marker
+      if (_deliveryMarker != null && _pointAnnotationManager != null) {
+        try {
+          await _pointAnnotationManager!.delete(_deliveryMarker!);
+          _deliveryMarker = null;
+        } catch (e) {
+          print('Error deleting old delivery marker: $e');
+        }
+      }
+      
+      // Remove existing dropoff marker circles (legacy cleanup)
       for (final circle in _dropoffMarkerCircles) {
         try {
           await _circleAnnotationManager!.delete(circle);
@@ -2134,7 +2601,7 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       }
       _dropoffMarkerCircles.clear();
 
-      // FIXED: Use reliable circle-based marker instead of emoji
+      // Create new delivery marker
       await _createDropoffCircleMarker();
       print('Dropoff marker created at: ${_deliveryLocation!.lat}, ${_deliveryLocation!.lng}');
     } catch (e) {
@@ -2142,78 +2609,33 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     }
   }
 
-  // Create neon-glowing dropoff marker 🔴 ENHANCED DARK THEME STYLE
+  // Create delivery marker with pin icon 🔴 ZOOM-INDEPENDENT
   Future<void> _createDropoffCircleMarker() async {
-    if (_circleAnnotationManager == null || _deliveryLocation == null) return;
+    if (_pointAnnotationManager == null || _deliveryLocation == null) return;
 
     try {
-      // 🌙 DARK THEME DROPOFF MARKER - ENHANCED VISIBILITY
+      debugPrint('🔴 Creating delivery pin marker...');
       
-      // Outer glow ring (wide soft glow) - BRIGHTER
-      final outerGlow = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _deliveryLocation!),
-          circleRadius: 35.0,                                           // Larger glow
-          circleColor: const Color(0xFFFF0066).withOpacity(0.4).value,  // 🔴 Brighter neon red
-          circleBlur: 2.0,                                              // More blur for glow
-        ),
-      );
-
-      // Middle glow ring - ENHANCED
-      final middleGlow = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _deliveryLocation!),
-          circleRadius: 26.0,
-          circleColor: const Color(0xFFFF0066).withOpacity(0.6).value,
-          circleBlur: 1.5,
-        ),
-      );
-
-      // Main delivery circle with bright neon red - ENHANCED
-      final mainMarker = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _deliveryLocation!),
-          circleRadius: 18.0,                                           // Larger
-          circleColor: const Color(0xFFFF0066).value,                   // 🔴 NEON RED
-          circleStrokeColor: Colors.white.value,                        // ⚪ WHITE BORDER for contrast
-          circleStrokeWidth: 4.0,                                       // Thicker white border
-          circleOpacity: 1.0,                                           // Full opacity
-        ),
-      );
-
-      // Inner white core (for contrast) - ENHANCED
-      final innerCore = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _deliveryLocation!),
-          circleRadius: 8.0,                                            // Larger core
-          circleColor: Colors.white.value,                              // Pure white
-        ),
-      );
-
-      // Pulsing outer ring (animated effect) - ENHANCED
-      final pulseRing = await _circleAnnotationManager!.create(
-        CircleAnnotationOptions(
-          geometry: Point(coordinates: _deliveryLocation!),
-          circleRadius: 22.0,
-          circleColor: Colors.transparent.value,
-          circleStrokeColor: const Color(0xFFFF0066).withOpacity(0.9).value, // Brighter
-          circleStrokeWidth: 3.5,                                       // Thicker pulse
-        ),
-      );
-
-      // Track all circles for cleanup
-      _dropoffMarkerCircles.addAll([outerGlow, middleGlow, mainMarker, innerCore, pulseRing]);
+      // Generate custom delivery pin icon (larger size)
+      final deliveryIcon = await MapMarkerService.createDeliveryMarker(size: 120);
       
-      // Apply emissive strength to prevent darkening (applies to all circles in manager)
-      // Note: This affects ALL circles, so we only need to set it once
+      // Create point annotation with custom icon and track it
+      _deliveryMarker = await _pointAnnotationManager!.create(
+        PointAnnotationOptions(
+          geometry: Point(coordinates: _deliveryLocation!),
+          image: deliveryIcon,
+          iconSize: 1.2, // Larger icon size
+          iconAnchor: IconAnchor.BOTTOM,
+        ),
+      );
       
-      debugPrint('🔴 Neon dropoff marker created with glow effect + emissive strength');
+      debugPrint('✅ Delivery pin marker created at (${_deliveryLocation!.lat}, ${_deliveryLocation!.lng})');
     } catch (e) {
-      print('Error creating dropoff circle marker: $e');
+      print('❌ Error creating delivery pin marker: $e');
     }
   }
 
-  // 🚏 Create numbered marker for multi-stop delivery - ENHANCED VISIBILITY
+  // 🚏 Create numbered marker for multi-stop delivery - ENHANCED VISIBILITY + DARK MODE FIX
   Future<List<CircleAnnotation>> _createNumberedStopMarker(int stopNumber, Position position) async {
     if (_circleAnnotationManager == null || _stopNumberAnnotationManager == null) return [];
     
@@ -2221,6 +2643,7 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     
     try {
       const stopBlue = Color(0xFF0080FF); // Blue for stops
+      const pureWhite = Color(0xFFFFFFFF); // ⚪ PURE WHITE (fixes dark mode)
       
       // Outer glow (largest, soft) - ENHANCED
       final outerGlow = await _circleAnnotationManager!.create(
@@ -2250,7 +2673,7 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
           geometry: Point(coordinates: position),
           circleRadius: 18.0,
           circleColor: stopBlue.value,
-          circleStrokeColor: Colors.white.value,                 // ⚪ WHITE BORDER
+          circleStrokeColor: pureWhite.value,                    // ⚪ PURE WHITE BORDER
           circleStrokeWidth: 4.0,                                // Thick border
           circleOpacity: 1.0,                                    // Full opacity
         ),
@@ -2262,7 +2685,7 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
         CircleAnnotationOptions(
           geometry: Point(coordinates: position),
           circleRadius: 14.0,
-          circleColor: Colors.white.value,
+          circleColor: pureWhite.value,                          // ⚪ PURE WHITE
         ),
       );
       circles.add(whiteRing);
@@ -2277,22 +2700,22 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       );
       circles.add(innerCircle);
 
-      // Add text number using PointAnnotation with textField - ENHANCED
+      // Add text number using PointAnnotation with textField - ENHANCED + DARK MODE FIX
       try {
         await _stopNumberAnnotationManager!.create(
           PointAnnotationOptions(
             geometry: Point(coordinates: position),
             textField: stopNumber.toString(),
             textSize: 16.0,                                      // Larger text
-            textColor: Colors.white.value,
-            textHaloColor: stopBlue.value,
+            textColor: pureWhite.value,                          // ⚪ PURE WHITE TEXT (fixes dark mode)
+            textHaloColor: stopBlue.value,                       // Blue halo
             textHaloWidth: 3.0,                                  // Thicker halo
             textHaloBlur: 0.5,
             textOffset: [0.0, 0.0],
             iconSize: 0.0, // No icon, just text
           ),
         );
-        debugPrint('🚏 Numbered marker created for stop $stopNumber with text');
+        debugPrint('🚏 Numbered marker created for stop $stopNumber with white text');
       } catch (e) {
         debugPrint('⚠️ Error adding text to marker: $e');
       }
@@ -2305,7 +2728,8 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
   }
 
   // Update driver marker (real-time tracking with pulsing effect)
-  // Update driver marker with SVG vehicle icon (real-time tracking)
+  // ⚠️ IMPORTANT: This method RECREATES the marker - only call for initial creation!
+  // For position updates during animation, the marker geometry is updated directly in the animation listener.
   Future<void> _updateDriverMarker() async {
     debugPrint('🚗 _updateDriverMarker called for delivery tracking');
     debugPrint('🚗 _driverLocation: $_driverLocation');
@@ -2325,7 +2749,7 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     try {
       print('🚗 Starting driver marker creation process...');
       
-      // Remove existing driver marker
+      // Remove existing driver marker (only if recreating)
       if (_driverMarker != null) {
         await _pointAnnotationManager!.delete(_driverMarker!);
         _driverMarker = null;

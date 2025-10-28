@@ -163,7 +163,7 @@ class _HomeScreenState extends State<HomeScreen>
       floatingActionButton: ModernFAB(
         onPressed: () {
           HapticFeedback.mediumImpact();
-          context.go('/create-delivery');
+          context.go('/location-selection');
         },
         icon: Icons.add_rounded,
         heroTag: "home_fab",
@@ -471,7 +471,7 @@ class _HomeScreenState extends State<HomeScreen>
                   AppTheme.primaryGradient,
                   () {
                     HapticFeedback.mediumImpact();
-                    context.go('/create-delivery');
+                    context.go('/location-selection');
                   },
                 ).animate().slideX(delay: 700.milliseconds, begin: 0.1),
               ),
@@ -1339,7 +1339,7 @@ class _HomeScreenState extends State<HomeScreen>
             ElevatedButton(
               onPressed: () {
                 Navigator.of(context).pop();
-                context.go('/create-delivery');
+                context.go('/location-selection');
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.primaryBlue,

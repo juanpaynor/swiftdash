@@ -2,24 +2,33 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/vehicle_type.dart';
 import '../models/saved_address.dart';
+import '../models/delivery.dart';
 import '../widgets/shared_delivery_map.dart';
 import '../widgets/address_input_field.dart';
 import '../widgets/save_address_dialog.dart';
 import '../widgets/multi_stop_selector.dart';
-import '../widgets/schedule_pickup_widget.dart';
+import '../widgets/app_drawer.dart';
+import '../widgets/modals/address_input_modal.dart';
+import '../widgets/modals/contact_details_modal.dart';
+import '../widgets/modals/payment_method_modal.dart';
 import '../services/hybrid_address_service.dart'; // UPDATED: Use hybrid service
 import '../services/saved_address_service.dart';
+import '../services/mapbox_matrix_service.dart';
+import '../services/delivery_service.dart';
+import '../services/directions_service.dart';
 import '../constants/app_theme.dart';
 import '../utils/back_button_handler.dart';
+import 'dart:async';
 
 class LocationSelectionScreen extends StatefulWidget {
-  final VehicleType selectedVehicleType;
+  final VehicleType? selectedVehicleType;
   
   const LocationSelectionScreen({
     super.key,
-    required this.selectedVehicleType,
+    this.selectedVehicleType,
   });
 
   @override
@@ -28,6 +37,7 @@ class LocationSelectionScreen extends StatefulWidget {
 
 class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
   final GlobalKey<State<SharedDeliveryMap>> _mapKey = GlobalKey<State<SharedDeliveryMap>>();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   
   // Controllers for address inputs
   final _pickupAddressController = TextEditingController();
@@ -46,6 +56,11 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
   // Saved addresses
   List<SavedAddress> _savedAddresses = [];
 
+  // Vehicle selection
+  VehicleType? _selectedVehicle;
+  List<VehicleType> _availableVehicles = [];
+  bool _isLoadingVehicles = true;
+
   // Multi-stop delivery support
   bool _isMultiStopMode = false;
   List<Map<String, dynamic>> _additionalStops = []; // List of dropoff stops
@@ -55,10 +70,69 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
   bool _isScheduled = false;
   DateTime? _scheduledPickupTime;
 
+  // Contact details (Angkas flow) - matches DeliveryContactsScreen format
+  String? _senderName;
+  String? _senderPhone;
+  String? _senderInstructions;
+  String? _receiverName;
+  String? _receiverPhone;
+  String? _receiverInstructions;
+
+  // Package details
+  String _packageDescription = 'Package delivery';
+  double? _packageWeightKg;
+  double? _packageValue;
+
+  // Payment details
+  String _paymentBy = 'sender'; // 'sender' or 'recipient'
+  String _paymentMethod = 'cash'; // 'cash' or 'maya'
+  
+  // Tip amount (Angkas flow)
+  double _tipAmount = 0.0;
+
+  // Traffic-aware routing (Matrix API)
+  TrafficAwareRoute? _trafficRoute;
+  bool _isLoadingRoute = false;
+  Timer? _routeDebounceTimer;
+
+  // Server-side pricing quote
+  Map<String, dynamic>? _currentQuote;
+  bool _isLoadingQuote = false;
+  String? _quoteId;
+
   @override
   void initState() {
     super.initState();
+    _selectedVehicle = widget.selectedVehicleType;
+    _loadVehicleTypes();
     _loadSavedAddresses();
+  }
+
+  Future<void> _loadVehicleTypes() async {
+    try {
+      final response = await Supabase.instance.client
+          .from('vehicle_types')
+          .select()
+          .eq('is_active', true)
+          .order('base_price', ascending: true); // Explicitly ascending: Motorcycle → Truck
+
+      List<VehicleType> types = (response as List)
+          .map((type) => VehicleType.fromJson(type))
+          .toList();
+      
+      setState(() {
+        _availableVehicles = types; // Cheapest first: Motorcycle → Sedan → SUV → Truck
+        _isLoadingVehicles = false;
+        
+        // If no vehicle was pre-selected, select the first one (cheapest = Motorcycle)
+        if (_selectedVehicle == null && types.isNotEmpty) {
+          _selectedVehicle = types.first;
+        }
+      });
+    } catch (e) {
+      setState(() => _isLoadingVehicles = false);
+      // Silently fail - user can still proceed with the initial vehicle type
+    }
   }
 
   Future<void> _loadSavedAddresses() async {
@@ -73,18 +147,44 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
   }
 
   bool get _canContinue {
+    // Must have vehicle selected
+    if (_selectedVehicle == null) {
+      debugPrint('❌ Cannot continue: No vehicle selected');
+      return false;
+    }
+    
     // For single-stop: need both pickup and delivery
     if (!_isMultiStopMode) {
-      return _pickupLatitude != null && 
+      final canContinue = _pickupLatitude != null && 
           _pickupLongitude != null &&
           _deliveryLatitude != null && 
           _deliveryLongitude != null;
+      
+      if (!canContinue) {
+        debugPrint('❌ Cannot continue: Missing locations');
+        debugPrint('   - Pickup: ${_pickupLatitude != null && _pickupLongitude != null ? "✓" : "✗"}');
+        debugPrint('   - Delivery: ${_deliveryLatitude != null && _deliveryLongitude != null ? "✓" : "✗"}');
+      } else {
+        debugPrint('✅ Can continue: All requirements met');
+      }
+      
+      return canContinue;
     }
     
     // For multi-stop: need pickup and at least one additional stop
-    return _pickupLatitude != null && 
+    final canContinue = _pickupLatitude != null && 
         _pickupLongitude != null &&
         _additionalStops.isNotEmpty;
+        
+    if (!canContinue) {
+      debugPrint('❌ Cannot continue (multi-stop): Missing requirements');
+      debugPrint('   - Pickup: ${_pickupLatitude != null && _pickupLongitude != null ? "✓" : "✗"}');
+      debugPrint('   - Additional stops: ${_additionalStops.isNotEmpty ? "✓ (${_additionalStops.length})" : "✗"}');
+    } else {
+      debugPrint('✅ Can continue (multi-stop): All requirements met');
+    }
+    
+    return canContinue;
   }
 
   int get _totalStopCount {
@@ -93,48 +193,117 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
   }
 
   bool get _canAddMoreStops {
-    return _isMultiStopMode && _totalStopCount < _maxStops;
+    // Allow adding stops as long as we're under the limit
+    // Multi-stop mode will be enabled automatically when first stop is added
+    return _totalStopCount < _maxStops;
   }
 
   bool get _hasDeliveryGradeAddresses =>
       _pickupDeliveryAddress?.isDeliverable == true &&
       _deliveryDeliveryAddress?.isDeliverable == true;
 
-  void _continueToSummary() {
-    if (!_canContinue) {
-      // This shouldn't happen since button is disabled, but just in case
-      return;
-    }
+  // NEW ANGKAS FLOW: Collect contact details then book directly
+  Future<void> _bookNowWithModals() async {
+    if (!_canContinue) return;
     
     HapticFeedback.lightImpact();
-    
-    // Prepare location data based on mode
-    final Map<String, dynamic> locationData = {
-      'vehicleType': widget.selectedVehicleType,
-      'pickupAddress': _pickupAddressController.text,
-      'pickupLat': _pickupLatitude!,
-      'pickupLng': _pickupLongitude!,
-      'isMultiStop': _isMultiStopMode,
-      'isScheduled': _isScheduled,
-      'scheduledPickupTime': _scheduledPickupTime?.toIso8601String(),
-    };
-    
-    if (_isMultiStopMode) {
-      // Multi-stop mode: pass all stops
-      locationData['stops'] = _additionalStops;
-      locationData['totalStops'] = _totalStopCount;
-    } else {
-      // Single-stop mode: pass single delivery location
-      locationData['deliveryAddress'] = _deliveryAddressController.text;
-      locationData['deliveryLat'] = _deliveryLatitude!;
-      locationData['deliveryLng'] = _deliveryLongitude!;
-    }
-    
-    // Navigate to contacts screen instead of order summary
-    context.push('/delivery-contacts', extra: {
-      'selectedVehicleType': widget.selectedVehicleType,
-      'locationData': locationData,
+
+    // ONLY show payment method modal (contact details already captured during address selection)
+    final paymentResult = await showPaymentMethodModal(
+      context: context,
+      initialMethod: _paymentMethod,
+      initialPaymentBy: _paymentBy,
+    );
+
+    if (paymentResult == null) return; // User cancelled
+
+    setState(() {
+      _paymentMethod = paymentResult['paymentMethod'] ?? 'cash';
+      _paymentBy = paymentResult['paymentBy'] ?? 'sender';
+      _packageDescription = paymentResult['packageDescription'] ?? 'Package delivery';
+      _packageWeightKg = paymentResult['packageWeightKg'];
+      _packageValue = paymentResult['packageValue'];
+      _tipAmount = paymentResult['tipAmount'] ?? 0.0;
     });
+
+    // Book directly (skip OrderSummaryScreen)
+    await _createBooking();
+  }
+
+  // Create booking and navigate directly to matching screen
+  Future<void> _createBooking() async {
+    try {
+      // Use server quote price (already calculated)
+      final totalPrice = _currentQuote != null 
+        ? _currentQuote!['total'] as double
+        : _selectedVehicle!.calculatePrice(_trafficRoute!.distanceKm);
+
+      debugPrint('💰 Creating booking with price: ₱$totalPrice (Quote ID: $_quoteId)');
+
+      Delivery delivery;
+
+      if (_isMultiStopMode && _additionalStops.isNotEmpty) {
+        // Multi-stop delivery
+        delivery = await DeliveryService.createMultiStopDelivery(
+          vehicleTypeId: _selectedVehicle!.id,
+          pickupAddress: _pickupAddressController.text,
+          pickupLat: _pickupLatitude!,
+          pickupLng: _pickupLongitude!,
+          pickupContactName: _senderName!,
+          pickupContactPhone: _senderPhone!,
+          pickupInstructions: _senderInstructions,
+          dropoffStops: _additionalStops,
+          packageDescription: _packageDescription,
+          packageWeightKg: _packageWeightKg,
+          packageValue: _packageValue,
+          totalPrice: totalPrice,
+          isScheduled: _isScheduled,
+          scheduledPickupTime: _scheduledPickupTime,
+          paymentBy: _paymentBy,
+          paymentMethod: _paymentMethod,
+          paymentStatus: _paymentMethod == 'cash' ? 'pending' : 'pending',
+        );
+      } else {
+        // Single-stop delivery
+        delivery = await DeliveryService.bookDeliveryViaFunction(
+          vehicleTypeId: _selectedVehicle!.id,
+          pickupAddress: _pickupAddressController.text,
+          pickupLat: _pickupLatitude!,
+          pickupLng: _pickupLongitude!,
+          pickupContactName: _senderName!,
+          pickupContactPhone: _senderPhone!,
+          pickupInstructions: _senderInstructions,
+          dropoffAddress: _deliveryAddressController.text,
+          dropoffLat: _deliveryLatitude!,
+          dropoffLng: _deliveryLongitude!,
+          dropoffContactName: _receiverName!,
+          dropoffContactPhone: _receiverPhone!,
+          dropoffInstructions: _receiverInstructions,
+          packageDescription: _packageDescription,
+          packageWeightKg: _packageWeightKg,
+          packageValue: _packageValue,
+          paymentBy: _paymentBy,
+          paymentMethod: _paymentMethod,
+          paymentStatus: _paymentMethod == 'cash' ? 'pending' : 'pending',
+        );
+      }
+
+      // Navigate directly to matching screen
+      if (mounted) {
+        HapticFeedback.heavyImpact();
+        context.go('/matching/${delivery.id}');
+      }
+    } catch (e) {
+      // Show error message
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error creating delivery: $e'),
+            backgroundColor: AppTheme.errorColor,
+          ),
+        );
+      }
+    }
   }
 
   // Save current pickup address
@@ -192,7 +361,7 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('${result.displayName} saved!'),
-          backgroundColor: AppTheme.primaryBlue,
+          backgroundColor: const Color.fromARGB(255, 14, 168, 230),
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 2),
         ),
@@ -288,6 +457,13 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
 
   // Add a new dropoff stop
   void _addDropoffStop(String address, double lat, double lng, [UnifiedDeliveryAddress? deliveryAddress]) {
+    // Enable multi-stop mode if not already enabled
+    if (!_isMultiStopMode) {
+      setState(() {
+        _isMultiStopMode = true;
+      });
+    }
+    
     if (!_canAddMoreStops) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -353,6 +529,9 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
         duration: const Duration(seconds: 1),
       ),
     );
+    
+    // IMPORTANT: Update map with new stops
+    _updateMapForMultiStop();
   }
 
   // Remove a dropoff stop
@@ -371,6 +550,9 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
         duration: const Duration(seconds: 1),
       ),
     );
+    
+    // IMPORTANT: Update map after removing stop
+    _updateMapForMultiStop();
   }
 
   // Reorder dropoff stops
@@ -384,6 +566,18 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
       final item = newList.removeAt(oldIndex);
       newList.insert(newIndex, item);
       _additionalStops = newList;
+    });
+    
+    // IMPORTANT: Update map after reordering stops
+    _updateMapForMultiStop();
+  }
+  
+  // Update map when multi-stop changes
+  void _updateMapForMultiStop() {
+    // Force map to rebuild by updating the widget tree
+    // The SharedDeliveryMap will automatically update based on the new _additionalStops list
+    setState(() {
+      // setState triggers a rebuild, map will receive updated additionalStops
     });
   }
 
@@ -519,13 +713,225 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
   void dispose() {
     _pickupAddressController.dispose();
     _deliveryAddressController.dispose();
+    _routeDebounceTimer?.cancel();
     super.dispose();
+  }
+
+  // Fetch traffic-aware route preview (Call #1)
+  Future<void> _fetchRoutePreview() async {
+    // Only fetch if we have both pickup and delivery coordinates
+    if (_pickupLatitude == null || _pickupLongitude == null ||
+        _deliveryLatitude == null || _deliveryLongitude == null) {
+      setState(() {
+        _trafficRoute = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _isLoadingRoute = true;
+    });
+
+    try {
+      debugPrint('🚦 Fetching traffic route: pickup → delivery');
+      
+      final route = await MapboxMatrixService.getTrafficAwareRoute([
+        [_pickupLongitude!, _pickupLatitude!],
+        [_deliveryLongitude!, _deliveryLatitude!],
+      ]);
+
+      if (route != null && mounted) {
+        setState(() {
+          _trafficRoute = route;
+          _isLoadingRoute = false;
+        });
+
+        debugPrint('✅ Route preview loaded: ${route.distanceKm.toStringAsFixed(1)}km, ${route.durationInTraffic}');
+        debugPrint('📊 Traffic: ${route.hasHeavyTraffic ? "Heavy" : "Light"}');
+        
+        // Fetch server quote after route is loaded
+        _fetchServerQuote();
+      } else if (mounted) {
+        setState(() {
+          _isLoadingRoute = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('❌ Route preview error: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingRoute = false;
+        });
+      }
+    }
+  }
+
+  // Fetch server-side pricing quote
+  Future<void> _fetchServerQuote() async {
+    if (_pickupLatitude == null || _pickupLongitude == null ||
+        _deliveryLatitude == null || _deliveryLongitude == null ||
+        _selectedVehicle == null) {
+      return;
+    }
+
+    setState(() => _isLoadingQuote = true);
+
+    try {
+      debugPrint('💰 Fetching server quote...');
+      
+      final quote = await DeliveryService.getQuote(
+        vehicleTypeId: _selectedVehicle!.id,
+        pickupLat: _pickupLatitude!,
+        pickupLng: _pickupLongitude!,
+        dropoffLat: _deliveryLatitude!,
+        dropoffLng: _deliveryLongitude!,
+        weightKg: _packageWeightKg,
+      );
+
+      if (mounted) {
+        setState(() {
+          _currentQuote = quote;
+          _quoteId = quote['quoteId'];
+          _isLoadingQuote = false;
+        });
+
+        debugPrint('✅ Server quote: ₱${quote['total']} (Quote ID: ${quote['quoteId']})');
+        debugPrint('📊 Distance: ${quote['distanceKm']}km, Base: ₱${quote['base']}, Per km: ₱${quote['perKm']}');
+      }
+    } catch (e) {
+      debugPrint('❌ Error fetching quote: $e');
+      if (mounted) {
+        setState(() => _isLoadingQuote = false);
+      }
+    }
+  }
+
+  // Debounced route fetch (wait 2 seconds after user stops typing)
+  void _debouncedRouteFetch() {
+    _routeDebounceTimer?.cancel();
+    _routeDebounceTimer = Timer(const Duration(seconds: 2), () {
+      _fetchRoutePreview();
+    });
+  }
+
+  // Build traffic dot indicator
+  Widget _buildTrafficDot(Color color, double percentage) {
+    if (percentage < 1) return const SizedBox.shrink();
+    
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          '${percentage.toStringAsFixed(0)}%',
+          style: GoogleFonts.inter(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Build location tap button (Angkas style)
+  Widget _buildLocationTapButton({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required String address,
+    String? contactName,
+    String? contactPhone,
+    required VoidCallback onTap,
+  }) {
+    final hasContact = contactName != null && contactPhone != null;
+    
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppTheme.surfaceColor,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.borderColor),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: iconColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, color: iconColor, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    address,
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: address.contains('Tap to select')
+                          ? AppTheme.textHint
+                          : AppTheme.textPrimary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (hasContact) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      '$contactName • $contactPhone',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: AppTheme.textSecondary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            Icon(
+              Icons.chevron_right,
+              color: AppTheme.textTertiary,
+              size: 20,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return SmartBackHandler(
       child: Scaffold(
+        key: _scaffoldKey,
+        drawer: const AppDrawer(),
         extendBodyBehindAppBar: true,
         extendBody: true,
       body: Stack(
@@ -533,9 +939,11 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
           // MAP AS BACKGROUND (FULL SCREEN)
           Positioned.fill(
             child: SharedDeliveryMap(
-              key: _mapKey,
-              onLocationSelected: (address, lat, lng, isPickup) {
+              key: _mapKey, // Keep GlobalKey for method access
+              onLocationSelected: (address, lat, lng, isPickup) async {
+                // Update location state and clear old traffic data
                 setState(() {
+                  _trafficRoute = null; // Clear old traffic data when location changes
                   if (isPickup) {
                     _pickupAddressController.text = address;
                     _pickupLatitude = lat;
@@ -546,6 +954,37 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
                     _deliveryLongitude = lng;
                   }
                 });
+                
+                // Show contact details modal (same as address search flow)
+                final contactResult = await showModalBottomSheet<Map<String, String?>>(
+                  context: context,
+                  isScrollControlled: true,
+                  backgroundColor: Colors.transparent,
+                  builder: (context) => ContactDetailsModal(
+                    title: isPickup ? 'Sender Details' : 'Receiver Details',
+                    initialName: isPickup ? _senderName : _receiverName,
+                    initialPhone: isPickup ? _senderPhone : _receiverPhone,
+                    initialNotes: isPickup ? _senderInstructions : _receiverInstructions,
+                  ),
+                );
+                
+                if (contactResult != null) {
+                  setState(() {
+                    if (isPickup) {
+                      _senderName = contactResult['name'];
+                      _senderPhone = contactResult['phone'];
+                      _senderInstructions = contactResult['instructions'];
+                    } else {
+                      _receiverName = contactResult['name'];
+                      _receiverPhone = contactResult['phone'];
+                      _receiverInstructions = contactResult['instructions'];
+                    }
+                  });
+                  debugPrint('✅ Contact details saved via map tap: ${contactResult['name']} - ${contactResult['phone']}');
+                }
+                
+                // Fetch route preview with traffic data
+                await _fetchRoutePreview();
               },
               initialPickupAddress: _pickupAddressController.text,
               initialDeliveryAddress: _deliveryAddressController.text,
@@ -555,80 +994,26 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
               deliveryLongitude: _deliveryLongitude,
               isMultiStop: _isMultiStopMode,
               additionalStops: _additionalStops,
+              trafficSegments: _trafficRoute?.segments.map((segment) => {
+                'coordinates': segment.coordinates,
+                'congestion': segment.congestion.name,
+                'distance': segment.distance,
+                'duration': segment.duration,
+              }).toList(),
             ),
           ),
           
-          // TOP BAR (floating over map)
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 16,
-            left: 20,
-            right: 20,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.95), // Slight transparency for glass effect
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.15),
-                    blurRadius: 20,
-                    spreadRadius: 2,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back_ios_rounded),
-                    onPressed: () {
-                      // Try to pop first, if that fails, go to vehicle selection
-                      if (Navigator.of(context).canPop()) {
-                        context.pop();
-                      } else {
-                        context.go('/create-delivery');
-                      }
-                    },
-                  ),
-                  Expanded(
-                    child: Column(
-                      children: [
-                        Text(
-                          'Select Locations',
-                          style: GoogleFonts.inter(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                            color: AppTheme.textPrimary,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        Text(
-                          'Vehicle: ${widget.selectedVehicleType.name}',
-                          style: GoogleFonts.inter(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: AppTheme.primaryBlue,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 40), // Space for symmetry
-                ],
-              ),
-            ),
-          ),
-          
-          // BOTTOM SHEET (20-30% of screen, swipeable)
+          // BOTTOM SHEET - ANGKAS STYLE (15% collapsed, 80% expanded)
           DraggableScrollableSheet(
-            initialChildSize: 0.3, // 30% of screen initially
-            minChildSize: 0.02,    // Minimum 1% - TRULY minimal to show map behind
-            maxChildSize: 0.5,     // Maximum 60% when expanded
+            initialChildSize: 0.15, // 15% collapsed - show pickup/delivery/button only
+            minChildSize: 0.15,     // Minimum 15%
+            maxChildSize: 0.80,     // Maximum 80% when expanded
+            snap: true,            // Snap to specific sizes
+            snapSizes: const [0.15, 0.80], // Either collapsed or expanded
             builder: (context, scrollController) {
               return Container(
                 decoration: const BoxDecoration(
-                  color: Colors.white,
+                  color: Colors.transparent,
                   borderRadius: BorderRadius.vertical(
                     top: Radius.circular(20),
                   ),
@@ -658,67 +1043,260 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
                             ),
                           ),
                         ),
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 16),
                         
-                        // Selected vehicle summary
+                        // ===== CARD 1: VEHICLE SELECTION =====
                         Container(
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
-                            color: AppTheme.primaryBlue.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: AppTheme.primaryBlue.withOpacity(0.3),
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                widget.selectedVehicleType.icon,
-                                color: AppTheme.primaryBlue,
-                                size: 24,
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
                               ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      widget.selectedVehicleType.name,
-                                      style: GoogleFonts.inter(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                        color: AppTheme.textPrimary,
-                                      ),
-                                    ),
-                                    Text(
-                                      'Base: ₱${widget.selectedVehicleType.basePrice.toStringAsFixed(0)} + ₱${widget.selectedVehicleType.pricePerKm.toStringAsFixed(0)}/km',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 12,
-                                        color: AppTheme.textSecondary,
-                                      ),
-                                    ),
-                                  ],
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Select Vehicle',
+                                style: GoogleFonts.inter(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.textPrimary,
                                 ),
+                              ),
+                              const SizedBox(height: 12),
+                              if (_isLoadingVehicles)
+                                Center(
+                                  child: CircularProgressIndicator(
+                                    valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primaryBlue),
+                                  ),
+                                )
+                              else if (_availableVehicles.isNotEmpty)
+                                SizedBox(
+                                  height: 70,
+                                  child: ListView.builder(
+                                    scrollDirection: Axis.horizontal,
+                                    itemCount: _availableVehicles.length,
+                                    itemBuilder: (context, index) {
+                                      final vehicle = _availableVehicles[index];
+                                      final isSelected = _selectedVehicle?.id == vehicle.id;
+                                      
+                                      return GestureDetector(
+                                        onTap: () {
+                                          setState(() {
+                                            _selectedVehicle = vehicle;
+                                          });
+                                          HapticFeedback.lightImpact();
+                                          // Fetch new quote with selected vehicle
+                                          _fetchServerQuote();
+                                        },
+                                        child: Container(
+                                          margin: EdgeInsets.only(
+                                            right: index < _availableVehicles.length - 1 ? 12 : 0,
+                                          ),
+                                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                          decoration: BoxDecoration(
+                                            gradient: isSelected ? AppTheme.primaryGradient : null,
+                                            color: isSelected ? null : Colors.grey[100],
+                                            borderRadius: BorderRadius.circular(12),
+                                            border: Border.all(
+                                              color: isSelected ? Colors.transparent : AppTheme.borderColor,
+                                              width: isSelected ? 0 : 1,
+                                            ),
+                                            boxShadow: isSelected ? [
+                                              BoxShadow(
+                                                color: AppTheme.primaryBlue.withOpacity(0.3),
+                                                blurRadius: 8,
+                                                offset: const Offset(0, 2),
+                                              ),
+                                            ] : null,
+                                          ),
+                                          child: Column(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              Icon(
+                                                vehicle.icon,
+                                                color: isSelected ? Colors.white : AppTheme.primaryBlue,
+                                                size: 28,
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                vehicle.name,
+                                                style: GoogleFonts.inter(
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: isSelected ? Colors.white : AppTheme.textPrimary,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        
+                        const SizedBox(height: 16),
+                        
+                        // ===== CARD 2: PICKUP & DELIVERY LOCATIONS =====
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Locations',
+                                style: GoogleFonts.inter(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              // Pickup Location Button
+                              _buildLocationTapButton(
+                                icon: Icons.radio_button_checked,
+                                iconColor: AppTheme.primaryBlue,
+                                label: 'Pickup Location',
+                                address: _pickupAddressController.text.isEmpty
+                                    ? 'Tap to select pickup address'
+                                    : _pickupAddressController.text,
+                                contactName: _senderName,
+                                contactPhone: _senderPhone,
+                                onTap: () async {
+                                  HapticFeedback.lightImpact();
+                                  final result = await showDialog<UnifiedDeliveryAddress>(
+                                    context: context,
+                                    builder: (context) => AddressInputModal(
+                                      title: 'Pickup Location',
+                                      savedAddresses: _savedAddresses,
+                                      initialAddress: _pickupAddressController.text.isEmpty ? null : _pickupAddressController.text,
+                                    ),
+                                  );
+                                  if (result != null) {
+                                    setState(() {
+                                      _pickupDeliveryAddress = result;
+                                      _pickupAddressController.text = result.deliveryLabel;
+                                      _pickupLatitude = result.latitude;
+                                      _pickupLongitude = result.longitude;
+                                      _trafficRoute = null; // Clear old traffic data
+                                    });
+                                    print('✅ Pickup address selected: ${result.deliveryLabel}');
+                                    
+                                    // IMPORTANT: Show contact details modal after address selection
+                                    final contactResult = await showModalBottomSheet<Map<String, String?>>(
+                                      context: context,
+                                      isScrollControlled: true,
+                                      backgroundColor: Colors.transparent,
+                                      builder: (context) => ContactDetailsModal(
+                                        title: 'Sender Details',
+                                        initialName: _senderName,
+                                        initialPhone: _senderPhone,
+                                        initialNotes: _senderInstructions,
+                                      ),
+                                    );
+                                    
+                                    if (contactResult != null) {
+                                      setState(() {
+                                        _senderName = contactResult['name'];
+                                        _senderPhone = contactResult['phone'];
+                                        _senderInstructions = contactResult['instructions'];
+                                      });
+                                      print('✅ Sender contact saved: $_senderName - $_senderPhone');
+                                    }
+                                    
+                                    // Fetch route after selection
+                                    _fetchRoutePreview();
+                                  }
+                                },
+                              ),
+                              
+                              const SizedBox(height: 12),
+                              
+                              // Delivery Location Button (Always visible - first drop-off)
+                              _buildLocationTapButton(
+                                icon: Icons.location_on,
+                                iconColor: AppTheme.errorColor,
+                                label: 'Drop-off Location',
+                                address: _deliveryAddressController.text.isEmpty
+                                    ? 'Tap to select delivery address'
+                                    : _deliveryAddressController.text,
+                                contactName: _receiverName,
+                                contactPhone: _receiverPhone,
+                                onTap: () async {
+                                  HapticFeedback.lightImpact();
+                                  final result = await showDialog<UnifiedDeliveryAddress>(
+                                    context: context,
+                                    builder: (context) => AddressInputModal(
+                                      title: 'Drop-off Location',
+                                      savedAddresses: _savedAddresses,
+                                      initialAddress: _deliveryAddressController.text.isEmpty ? null : _deliveryAddressController.text,
+                                    ),
+                                  );
+                                  if (result != null) {
+                                    setState(() {
+                                      _deliveryDeliveryAddress = result;
+                                      _deliveryAddressController.text = result.deliveryLabel;
+                                      _deliveryLatitude = result.latitude;
+                                      _deliveryLongitude = result.longitude;
+                                      _trafficRoute = null; // Clear old traffic data
+                                    });
+                                    print('✅ Delivery address selected: ${result.deliveryLabel}');
+                                    
+                                    // IMPORTANT: Show contact details modal after address selection
+                                    final contactResult = await showModalBottomSheet<Map<String, String?>>(
+                                      context: context,
+                                      isScrollControlled: true,
+                                      backgroundColor: Colors.transparent,
+                                      builder: (context) => ContactDetailsModal(
+                                        title: 'Receiver Details',
+                                        initialName: _receiverName,
+                                        initialPhone: _receiverPhone,
+                                        initialNotes: _receiverInstructions,
+                                      ),
+                                    );
+                                    
+                                    if (contactResult != null) {
+                                      setState(() {
+                                        _receiverName = contactResult['name'];
+                                        _receiverPhone = contactResult['phone'];
+                                        _receiverInstructions = contactResult['instructions'];
+                                      });
+                                      print('✅ Receiver contact saved: $_receiverName - $_receiverPhone');
+                                    }
+                                    
+                                    // Fetch route after selection
+                                    _fetchRoutePreview();
+                                  }
+                                },
                               ),
                             ],
                           ),
                         ),
                         
-                        const SizedBox(height: 24),
-                        
-                        // Location inputs
-                        Text(
-                          'Where to?',
-                          style: GoogleFonts.inter(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w700,
-                            color: AppTheme.textPrimary,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-
-                        // Saved addresses section
+                        // Saved addresses (optional - outside cards)
                         if (_savedAddresses.isNotEmpty) ...[
+                          const SizedBox(height: 12),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
@@ -768,163 +1346,127 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
                               },
                             ),
                           ),
-                          const SizedBox(height: 20),
-                        ],
-                        
-                        // Pickup address input
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                'Pickup Location',
-                                style: GoogleFonts.inter(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppTheme.textPrimary,
-                                ),
-                              ),
-                            ),
-                            if (_pickupLatitude != null && _pickupLongitude != null)
-                              TextButton.icon(
-                                onPressed: _savePickupAddress,
-                                icon: const Icon(Icons.bookmark_add, size: 16),
-                                label: Text(
-                                  'Save',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: AppTheme.primaryBlue,
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  minimumSize: const Size(0, 0),
-                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                ),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        
-                        AddressInputField(
-                          label: '',
-                          hintText: 'Enter pickup address or tap on map',
-                          initialAddress: _pickupAddressController.text,
-                          savedAddresses: _savedAddresses,
-                          onSavedAddressSelected: _useSavedAddressForPickup,
-                          onLocationSelected: (address, lat, lng) {
-                            setState(() {
-                              _pickupAddressController.text = address;
-                              _pickupLatitude = lat;
-                              _pickupLongitude = lng;
-                            });
-                          },
-                          // NEW: Enhanced delivery address callback for precise pickup location
-                          onDeliveryAddressSelected: (deliveryAddress) {
-                            setState(() {
-                              _pickupDeliveryAddress = deliveryAddress;
-                              _pickupAddressController.text = deliveryAddress.deliveryLabel;
-                              _pickupLatitude = deliveryAddress.latitude;
-                              _pickupLongitude = deliveryAddress.longitude;
-                            });
-                            print('HYBRID Pickup Address: ${deliveryAddress.deliveryLabel}');
-                            print('- Source: ${deliveryAddress.sourceService}');
-                            print('- Business: ${deliveryAddress.name ?? "N/A"}');
-                            print('- House Number: ${deliveryAddress.houseNumber ?? "N/A"}');
-                            print('- Street: ${deliveryAddress.street ?? "N/A"}');
-                            print('- Barangay: ${deliveryAddress.barangay ?? "N/A"}');
-                            print('- City: ${deliveryAddress.city ?? "N/A"}');
-                            print('- Quality Score: ${deliveryAddress.qualityScore}/100');
-                            print('- Deliverable: ${deliveryAddress.isDeliverable}');
-                          },
-                        ),
-                        
-                        const SizedBox(height: 24),
-                        
-                        // Delivery address input (ALWAYS SHOWN for clarity)
-                        if (!_isMultiStopMode) ...[
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  'Delivery Location',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppTheme.textPrimary,
-                                  ),
-                                ),
-                              ),
-                              if (_deliveryLatitude != null && _deliveryLongitude != null)
-                                TextButton.icon(
-                                  onPressed: _saveDeliveryAddress,
-                                  icon: const Icon(Icons.bookmark_add, size: 16),
-                                  label: Text(
-                                    'Save',
-                                    style: GoogleFonts.inter(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: AppTheme.primaryBlue,
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    minimumSize: const Size(0, 0),
-                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                  ),
-                                ),
-                            ],
-                          ),
                           const SizedBox(height: 8),
-                          
-                          AddressInputField(
-                            label: '',
-                            hintText: 'Enter delivery address or tap on map',
-                            initialAddress: _deliveryAddressController.text,
-                            savedAddresses: _savedAddresses,
-                            onSavedAddressSelected: _useSavedAddressForDelivery,
-                            onLocationSelected: (address, lat, lng) {
-                              setState(() {
-                                _deliveryAddressController.text = address;
-                                _deliveryLatitude = lat;
-                                _deliveryLongitude = lng;
-                              });
-                            },
-                            // NEW: Enhanced delivery address callback for precise delivery location
-                            onDeliveryAddressSelected: (deliveryAddress) {
-                              setState(() {
-                                _deliveryDeliveryAddress = deliveryAddress;
-                                _deliveryAddressController.text = deliveryAddress.deliveryLabel;
-                                _deliveryLatitude = deliveryAddress.latitude;
-                                _deliveryLongitude = deliveryAddress.longitude;
-                              });
-                              print('HYBRID Delivery Address: ${deliveryAddress.deliveryLabel}');
-                              print('- Source: ${deliveryAddress.sourceService}');
-                              print('- Business: ${deliveryAddress.name ?? "N/A"}');
-                              print('- House Number: ${deliveryAddress.houseNumber ?? "N/A"}');
-                              print('- Street: ${deliveryAddress.street ?? "N/A"}');
-                              print('- Barangay: ${deliveryAddress.barangay ?? "N/A"}');
-                              print('- City: ${deliveryAddress.city ?? "N/A"}');
-                              print('- Quality Score: ${deliveryAddress.qualityScore}/100');
-                              print('- Deliverable: ${deliveryAddress.isDeliverable}');
-                            },
-                          ),
                         ],
-                        
-                        const SizedBox(height: 24),
-                        
-                        // Multi-Stop Toggle and List
-                        MultiStopSelector(
-                          isMultiStop: _isMultiStopMode,
-                          onChanged: _toggleMultiStopMode,
-                          currentStopCount: _additionalStops.length,
-                          maxStops: _maxStops,
-                        ),
                         
                         const SizedBox(height: 16),
                         
-                        // Multi-stop stops list
-                        if (_isMultiStopMode) ...[
+                        // ===== CARD 3: ADD STOP & MULTI-STOP =====
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: GestureDetector(
+                            onTap: _additionalStops.length < _maxStops ? () {
+                              HapticFeedback.lightImpact();
+                              // Enable multi-stop mode when adding first stop
+                              if (!_isMultiStopMode) {
+                                setState(() {
+                                  _isMultiStopMode = true;
+                                });
+                              }
+                              _showAddStopDialog();
+                            } : null,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                              decoration: BoxDecoration(
+                                color: Colors.grey[50],
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: _additionalStops.length < _maxStops 
+                                    ? AppTheme.primaryBlue.withOpacity(0.2)
+                                    : AppTheme.textSecondary.withOpacity(0.2),
+                                  width: 1,
+                                ),
+                              ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 36,
+                                  height: 36,
+                                  decoration: BoxDecoration(
+                                    gradient: _additionalStops.length < _maxStops 
+                                      ? AppTheme.primaryGradient
+                                      : LinearGradient(
+                                          colors: [
+                                            AppTheme.textSecondary.withOpacity(0.3),
+                                            AppTheme.textSecondary.withOpacity(0.3),
+                                          ],
+                                        ),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Icon(
+                                    Icons.add,
+                                    color: Colors.white,
+                                    size: 20,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Add Stop',
+                                        style: GoogleFonts.inter(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                          color: _additionalStops.length < _maxStops 
+                                            ? AppTheme.textPrimary
+                                            : AppTheme.textSecondary,
+                                        ),
+                                      ),
+                                      if (_additionalStops.isNotEmpty)
+                                        Text(
+                                          '${_additionalStops.length} of $_maxStops stops',
+                                          style: GoogleFonts.inter(
+                                            fontSize: 12,
+                                            color: AppTheme.textSecondary,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                                if (_additionalStops.length < _maxStops)
+                                  Icon(
+                                    Icons.chevron_right,
+                                    color: AppTheme.textSecondary,
+                                    size: 20,
+                                  ),
+                              ],
+                            ),
+                            ),
+                          ),
+                        ),
+                        
+                        // Multi-stop stops list (if active)
+                        if (_isMultiStopMode && _additionalStops.isNotEmpty) ...[
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
                           Row(
                             children: [
                               Expanded(
@@ -1021,61 +1563,84 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
                             ),
                           
                           // Pricing info
-                          if (widget.selectedVehicleType.additionalStopCharge != null &&
+                          if (_selectedVehicle != null &&
+                              _selectedVehicle!.additionalStopCharge != null &&
                               _additionalStops.isNotEmpty) ...[
                             const SizedBox(height: 16),
                             MultiStopPricingInfo(
-                              additionalStopCharge: widget.selectedVehicleType.additionalStopCharge!,
+                              additionalStopCharge: _selectedVehicle!.additionalStopCharge!,
                               additionalStops: _additionalStops.length,
                             ),
                           ],
+                              ],
+                            ),
+                          ),
                         ],
                         
-                        const SizedBox(height: 24),
-                        
-                        // Schedule Pickup Toggle
-                        SchedulePickupWidget(
-                          isScheduled: _isScheduled,
-                          scheduledTime: _scheduledPickupTime,
-                          onScheduleToggled: (enabled) {
-                            setState(() {
-                              _isScheduled = enabled;
-                            });
-                          },
-                          onScheduledTimeChanged: (time) {
-                            setState(() {
-                              _scheduledPickupTime = time;
-                            });
-                          },
-                        ),
+                        // Traffic-aware route preview (always show when locations are set)
+                        if (_pickupLatitude != null && _deliveryLatitude != null) ...[
+                          const SizedBox(height: 12),
+                          if (_isLoadingRoute)
+                            Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: AppTheme.primaryBlue.withOpacity(0.05),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: AppTheme.primaryBlue.withOpacity(0.3),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primaryBlue),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Text(
+                                    'Calculating route with traffic...',
+                                    style: GoogleFonts.inter(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                      color: AppTheme.primaryBlue,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
                         
                         const SizedBox(height: 16),
                         
-                        // Address quality indicator
-                        if (_canContinue) ...[
+                        // ===== CARD 6: PRICING DISPLAY =====
+                        if (_selectedVehicle != null && _trafficRoute != null) ...[
                           Container(
                             padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
-                              color: _hasDeliveryGradeAddresses 
-                                  ? Colors.green.withOpacity(0.1)
-                                  : Colors.blue.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(12),
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppTheme.primaryBlue.withOpacity(0.15),
+                                  blurRadius: 15,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
                               border: Border.all(
-                                color: _hasDeliveryGradeAddresses 
-                                    ? Colors.green.withOpacity(0.3)
-                                    : Colors.blue.withOpacity(0.3),
+                                color: AppTheme.primaryBlue.withOpacity(0.2),
+                                width: 1,
                               ),
                             ),
                             child: Row(
                               children: [
                                 Icon(
-                                  _hasDeliveryGradeAddresses 
-                                      ? Icons.verified
-                                      : Icons.search,
-                                  color: _hasDeliveryGradeAddresses 
-                                      ? Colors.green
-                                      : Colors.blue,
-                                  size: 20,
+                                  _selectedVehicle!.icon,
+                                  color: AppTheme.primaryBlue,
+                                  size: 24,
                                 ),
                                 const SizedBox(width: 12),
                                 Expanded(
@@ -1083,69 +1648,55 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        _hasDeliveryGradeAddresses 
-                                            ? 'High Quality Addresses ✓'
-                                            : 'Enhanced Address Search',
+                                        _selectedVehicle!.name,
                                         style: GoogleFonts.inter(
                                           fontSize: 14,
                                           fontWeight: FontWeight.w600,
-                                          color: _hasDeliveryGradeAddresses 
-                                              ? Colors.green
-                                              : Colors.blue,
+                                          color: AppTheme.textPrimary,
                                         ),
                                       ),
                                       Text(
-                                        _hasDeliveryGradeAddresses 
-                                            ? 'Delivery-ready addresses with precise details'
-                                            : 'Using Google Places for enhanced search quality',
+                                        '${_trafficRoute!.distanceKm.toStringAsFixed(1)} km',
                                         style: GoogleFonts.inter(
                                           fontSize: 12,
-                                          color: _hasDeliveryGradeAddresses 
-                                              ? Colors.green.shade700
-                                              : Colors.blue.shade700,
+                                          color: AppTheme.textSecondary,
                                         ),
                                       ),
                                     ],
                                   ),
                                 ),
+                                _isLoadingQuote
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primaryBlue),
+                                      ),
+                                    )
+                                  : Text(
+                                      _currentQuote != null
+                                        ? '₱${_currentQuote!['total'].toStringAsFixed(2)}'
+                                        : '₱${_selectedVehicle!.calculatePrice(_trafficRoute!.distanceKm).toStringAsFixed(2)}',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.w800,
+                                        color: AppTheme.primaryBlue,
+                                      ),
+                                    ),
+                                const SizedBox(width: 8),
+                                Icon(
+                                  Icons.info_outline,
+                                  color: AppTheme.primaryBlue,
+                                  size: 18,
+                                ),
                               ],
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 16),
                         ],
                         
-                        // Helper text
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: AppTheme.infoLight,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.info_outline,
-                                color: AppTheme.infoColor,
-                                size: 20,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Text(
-                                  'Tap on the map to quickly select pickup and delivery locations',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 14,
-                                    color: AppTheme.infoColor,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        
-                        const SizedBox(height: 24),
-                        
-                        // Continue button 🌊 NEON GRADIENT BUTTON
+                        // Book Now Button 🌊 NEON GRADIENT BUTTON
                         SizedBox(
                           width: double.infinity,
                           height: 56,
@@ -1171,7 +1722,7 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
                                   : [],
                             ),
                             child: ElevatedButton(
-                              onPressed: _canContinue ? _continueToSummary : null,
+                              onPressed: _canContinue ? _bookNowWithModals : null,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Colors.transparent,
                                 shadowColor: Colors.transparent,
@@ -1184,7 +1735,7 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
                               ),
                               child: Text(
                                 _canContinue 
-                                    ? 'Continue'
+                                    ? 'Book Now'
                                     : 'Select pickup and delivery locations',
                                 style: GoogleFonts.inter(
                                   fontSize: 16,
@@ -1204,12 +1755,78 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
             },
           ),
           
-          // Floating "My Location" button (top right, fixed position)
+          // Floating burger menu button (top left)
           Positioned(
-            top: MediaQuery.of(context).padding.top + 90, // Below top banner
-            right: 20,
+            top: MediaQuery.of(context).padding.top + 16,
+            left: 16,
             child: FloatingActionButton.small(
-              heroTag: "my_location", // Prevent hero tag conflicts
+              heroTag: "burger_menu",
+              onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+              backgroundColor: Colors.white,
+              foregroundColor: AppTheme.primaryBlue,
+              elevation: 8,
+              child: const Icon(Icons.menu, size: 24),
+            ),
+          ),
+          
+          // Floating ETA pill (top center)
+          if (_trafficRoute != null)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 16,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    gradient: AppTheme.primaryGradient,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppTheme.primaryBlue.withOpacity(0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.directions_car,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _trafficRoute!.durationInTraffic,
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '• ${_trafficRoute!.distanceKm.toStringAsFixed(1)} km',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.white.withOpacity(0.9),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          
+          // Floating "My Location" button (top right)
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 16,
+            right: 16,
+            child: FloatingActionButton.small(
+              heroTag: "my_location",
               onPressed: _focusOnMyLocation,
               backgroundColor: Colors.white,
               foregroundColor: AppTheme.primaryBlue,

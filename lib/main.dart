@@ -10,6 +10,7 @@ import 'package:swiftdash/screens/splash_screen.dart';
 import 'package:swiftdash/services/payment_service.dart';
 import 'package:swiftdash/providers/app_state_provider.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:swiftdash/services/ably_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -34,8 +35,21 @@ Future<void> main() async {
       anonKey: Env.supabaseAnonKey,
     );
 
-    // Initialize Mapbox with access token
+    // Initialize Mapbox with access token and map tile caching
     MapboxOptions.setAccessToken('pk.eyJ1Ijoic3dpZnRkYXNoIiwiYSI6ImNtZzNiazczczEzZmQycnIwdno1Z2NtYW0ifQ.9zBJVXVCBLU3eN1jZQTJUA');
+    
+    // Enable map tile caching (50 MB - covers service area + ~15-20 recent deliveries)
+    // This improves map load times, reduces data usage, and lowers Mapbox API costs
+    MapboxMapsOptions.setTileStoreUsageMode(TileStoreUsageMode.READ_AND_UPDATE);
+
+    // Initialize Ably Service
+    try {
+      await AblyService().initialize(Env.ablyClientKey);
+      debugPrint('✅ Ably service initialized');
+    } catch (e) {
+      debugPrint('⚠️ Ably initialization failed: $e');
+      // Non-critical - app will continue without realtime
+    }
 
     // Initialize PaymentService with Maya credentials from environment
     try {

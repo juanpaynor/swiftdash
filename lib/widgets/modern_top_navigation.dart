@@ -39,7 +39,7 @@ class ModernTopNavigationBar extends StatelessWidget {
           // Back button
           _buildNavigationButton(
             icon: Icons.arrow_back_ios,
-            onPressed: onBackPressed ?? () => context.go('/home'),
+            onPressed: onBackPressed ?? () => context.go('/location-selection'),
           ),
           
           const SizedBox(width: 16),

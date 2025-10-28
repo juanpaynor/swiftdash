@@ -75,20 +75,99 @@ class VehicleType {
 
   // Get icon based on vehicle type
   IconData get icon {
-    switch (name.toLowerCase()) {
-      case 'motorcycle':
-        return Icons.motorcycle;
-      case 'vehicle':
-      case 'car':
-        return Icons.directions_car;
-      case 'pickup':
-        return Icons.local_shipping;
-      case 'van':
-        return Icons.local_shipping;
-      case 'truck':
-        return Icons.fire_truck;
-      default:
-        return Icons.delivery_dining;
+    final vehicleName = name.toLowerCase();
+    
+    // Motorcycle/Bike delivery
+    if (vehicleName.contains('motorcycle') || 
+        vehicleName.contains('bike') || 
+        vehicleName.contains('motor')) {
+      return Icons.two_wheeler; // Motorcycle icon
     }
+    
+    // Car/Sedan
+    if (vehicleName.contains('car') || 
+        vehicleName.contains('sedan')) {
+      return Icons.directions_car; // Car icon
+    }
+    
+    // SUV/Large Car
+    if (vehicleName.contains('suv')) {
+      return Icons.airport_shuttle; // SUV/larger vehicle icon
+    }
+    
+    // Van/Mini Van
+    if (vehicleName.contains('van') || 
+        vehicleName.contains('mini')) {
+      return Icons.local_shipping; // Van icon
+    }
+    
+    // Pickup Truck
+    if (vehicleName.contains('pickup')) {
+      return Icons.rv_hookup; // Pickup truck icon
+    }
+    
+    // Truck/Large Vehicle/Box Truck
+    if (vehicleName.contains('truck') || 
+        vehicleName.contains('lorry') ||
+        vehicleName.contains('box') || 
+        vehicleName.contains('cargo') ||
+        vehicleName.contains('large')) {
+      return Icons.fire_truck; // Large truck icon
+    }
+    
+    // Default delivery icon
+    return Icons.delivery_dining;
+  }
+
+  // Get color scheme based on vehicle type
+  Color get primaryColor {
+    final vehicleName = name.toLowerCase();
+    
+    // Motorcycle - Orange (fast, agile)
+    if (vehicleName.contains('motorcycle') || 
+        vehicleName.contains('bike') || 
+        vehicleName.contains('motor')) {
+      return const Color(0xFFFF6B35);
+    }
+    
+    // Car/Sedan - Blue (standard)
+    if (vehicleName.contains('car') || 
+        vehicleName.contains('sedan') || 
+        vehicleName.contains('vehicle')) {
+      return const Color(0xFF2196F3);
+    }
+    
+    // SUV - Purple (premium)
+    if (vehicleName.contains('suv') || 
+        vehicleName.contains('large')) {
+      return const Color(0xFF9C27B0);
+    }
+    
+    // Pickup - Green (utility)
+    if (vehicleName.contains('pickup')) {
+      return const Color(0xFF4CAF50);
+    }
+    
+    // Van - Teal (spacious)
+    if (vehicleName.contains('van') || 
+        vehicleName.contains('mini')) {
+      return const Color(0xFF009688);
+    }
+    
+    // Truck - Red (heavy duty)
+    if (vehicleName.contains('truck') || 
+        vehicleName.contains('lorry') ||
+        vehicleName.contains('box') || 
+        vehicleName.contains('cargo')) {
+      return const Color(0xFFE53935);
+    }
+    
+    // Default - Gray
+    return const Color(0xFF757575);
+  }
+
+  // Get lighter version of the primary color for backgrounds
+  Color get lightColor {
+    return primaryColor.withOpacity(0.1);
   }
 }

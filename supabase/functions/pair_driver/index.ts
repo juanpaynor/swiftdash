@@ -136,10 +136,30 @@ serve(async (req: Request) => {
       return { ...driver, distance };
     }).sort((a: any, b: any) => a.distance - b.distance);
 
+    console.log(`📊 Driver distances from pickup (${delivery.pickup_latitude}, ${delivery.pickup_longitude}):`);
+    driversWithDistance.slice(0, 5).forEach((d: any, i: number) => {
+      console.log(`   ${i + 1}. Driver ${d.id}: ${d.distance.toFixed(2)}km (at ${d.current_latitude}, ${d.current_longitude})`);
+    });
     console.log(`🎯 Closest driver: ${driversWithDistance[0]?.id || 'Unknown'} at ${driversWithDistance[0]?.distance?.toFixed(2)}km`);
 
-    // Offer delivery to closest driver with calculated pricing
+    // ⚠️ CHECK MAXIMUM RADIUS - don't assign drivers too far away
+    const MAX_PICKUP_RADIUS_KM = 6; // Maximum 10km from pickup location
     const closestDriver = driversWithDistance[0];
+    
+    if (closestDriver.distance > MAX_PICKUP_RADIUS_KM) {
+      console.error(`❌ Closest driver is ${closestDriver.distance.toFixed(2)}km away (max: ${MAX_PICKUP_RADIUS_KM}km)`);
+      return new Response(JSON.stringify({ 
+        ok: false, 
+        message: `No drivers available within ${MAX_PICKUP_RADIUS_KM}km of pickup location. Closest driver is ${closestDriver.distance.toFixed(1)}km away.`,
+        closest_driver_distance: closestDriver.distance,
+        max_radius: MAX_PICKUP_RADIUS_KM
+      }), {
+        headers: { 'content-type': 'application/json' },
+        status: 404,
+      });
+    }
+
+    // Offer delivery to closest driver with calculated pricing
     await offerDeliveryToDriver(supabase, body.deliveryId, closestDriver.id, delivery.pickup_latitude, delivery.pickup_longitude);
     
     console.log(`📨 Delivery offered to driver: ${closestDriver.id} for delivery: ${body.deliveryId}`);
