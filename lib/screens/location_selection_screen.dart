@@ -1005,9 +1005,9 @@ class _LocationSelectionScreenState extends State<LocationSelectionScreen> {
           
           // BOTTOM SHEET - ANGKAS STYLE (15% collapsed, 80% expanded)
           DraggableScrollableSheet(
-            initialChildSize: 0.15, // 15% collapsed - show pickup/delivery/button only
-            minChildSize: 0.15,     // Minimum 15%
-            maxChildSize: 0.80,     // Maximum 80% when expanded
+            initialChildSize: 0.30, // 15% collapsed - show pickup/delivery/button only
+            minChildSize: 0.20,     // Minimum 15%
+            maxChildSize: 0.90,     // Maximum 80% when expanded
             snap: true,            // Snap to specific sizes
             snapSizes: const [0.15, 0.80], // Either collapsed or expanded
             builder: (context, scrollController) {

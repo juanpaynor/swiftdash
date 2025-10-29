@@ -4,6 +4,7 @@ import '../models/delivery.dart';
 import '../models/chat_message.dart';
 import '../services/chat_service.dart';
 import 'animated_status_banner.dart';
+import 'circular_progress_ring.dart';
 import 'chat_modal.dart';
 
 class DraggableTrackingSheet extends StatefulWidget {
@@ -113,7 +114,11 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
               ),
             ],
           ),
-          child: Column(
+          child: Stack(
+            clipBehavior: Clip.none, // Allow overflow for circular ring
+            children: [
+              // Main content
+              Column(
             children: [
               // Gradient handle bar
               GestureDetector(
@@ -371,7 +376,20 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
               ),
             ],
           ),
-        );
+          
+          // Floating circular progress ring (overlaps map and sheet)
+          Positioned(
+            top: -50, // Slight overlap above sheet
+            left: MediaQuery.of(context).size.width / 2 - 90,
+            child: CircularProgressRing(
+              currentStage: widget.currentStage,
+              size: 180,
+              eta: widget.estimatedArrival,
+            ),
+          ),
+        ],
+      ),
+    );
       },
     );
   }
@@ -381,39 +399,56 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
       controller: scrollController,
       padding: const EdgeInsets.all(20),
       children: [
-                    // Animated Status Banner
-                    AnimatedStatusBanner(currentStage: widget.currentStage),
-                    const SizedBox(height: 16),
-                    
-                    // Driver Information Section
-                    if (widget.driverProfile != null) ...[
-                      _buildDriverInfoCard(),
-                      const SizedBox(height: 16),
-                      
-                      // Action Buttons Row
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildActionButton(
-                              'Call Driver',
-                              Icons.phone,
-                              const Color(0xFF10B981),
-                              () => _callDriver(),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildActionButton(
-                              'Message',
-                              Icons.message,
-                              const Color(0xFF1DA1F2),
-                              () => _messageDriver(),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                    ],
+        // Space for overlapping circular ring
+        const SizedBox(height: 100),
+        
+        // Chat and Call buttons (flanking the circular ring above)
+        if (widget.driverProfile != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // Chat button (left)
+                _buildFloatingActionButton(
+                  icon: Icons.chat_bubble_outline,
+                  label: 'Chat',
+                  onPressed: () => _messageDriver(),
+                ),
+                
+                // Empty space for the circular ring
+                const SizedBox(width: 180),
+                
+                // Call button (right)
+                _buildFloatingActionButton(
+                  icon: Icons.phone_outlined,
+                  label: 'Call',
+                  onPressed: () => _callDriver(),
+                ),
+              ],
+            ),
+          ),
+        
+        const SizedBox(height: 20),
+        
+        // Status message
+        Text(
+          _getStatusMessage(widget.currentStage),
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF111827),
+          ),
+        ),
+        
+        const SizedBox(height: 24),
+        
+        // Driver Information Section
+        if (widget.driverProfile != null) ...[
+          _buildDriverInfoCard(),
+          const SizedBox(height: 16),
+        ],
                     
                     // ETA Section
                     Container(
@@ -985,38 +1020,69 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
     );
   }
 
-  Widget _buildActionButton(
-    String label,
-    IconData icon,
-    Color color,
-    VoidCallback onPressed,
-  ) {
-    return ElevatedButton(
-      onPressed: onPressed,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: color,
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-        elevation: 2,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 18),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
+  Widget _buildFloatingActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: const Color(0xFFE5E7EB),
+              width: 1,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.08),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-        ],
-      ),
+          child: IconButton(
+            onPressed: onPressed,
+            icon: Icon(icon),
+            color: const Color(0xFF2E4A9B),
+            iconSize: 24,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF6B7280),
+          ),
+        ),
+      ],
     );
+  }
+
+  String _getStatusMessage(DeliveryStage stage) {
+    switch (stage) {
+      case DeliveryStage.orderConfirmed:
+        return "Your order has been confirmed";
+      case DeliveryStage.driverAssigned:
+        return "Driver is on the way to pickup";
+      case DeliveryStage.goingToPickup:
+        return "Driver heading to pickup location";
+      case DeliveryStage.atPickup:
+        return "Driver has arrived at pickup";
+      case DeliveryStage.packageCollected:
+        return "Driver has your package!";
+      case DeliveryStage.onTheWay:
+        return "Driver heading to you now";
+      case DeliveryStage.delivered:
+        return "Package delivered! Enjoy! 🎉";
+    }
   }
 
   void _callDriver() async {

@@ -50,8 +50,8 @@ class _TrackingScreenState extends State<TrackingScreen> {
   late StreamSubscription _locationSubscription;
   late StreamSubscription _driverSubscription;
   
-  // Supabase Realtime channel for delivery status updates
-  RealtimeChannel? _deliveryChannel;
+  // Real-time status (from Ably, not database)
+  String? _currentRealtimeStatus;
   
   // Chat service
   ChatService? _chatService;
@@ -65,6 +65,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   String _driverStatus = 'unknown';
   bool _isDriverOnline = false;
   DateTime? _lastLocationUpdate;
+  StreamSubscription? _statusUpdateSubscription;
 
   @override
   void initState() {
@@ -200,32 +201,23 @@ class _TrackingScreenState extends State<TrackingScreen> {
       // Initialize chat service
       await _initializeChatService();
       
-      // Subscribe to Supabase Realtime for delivery status updates
-      debugPrint('🔧 TrackingScreen: Setting up Supabase realtime for delivery status');
+      // Subscribe to Ably status updates (replaces Supabase Realtime)
+      debugPrint('🔧 TrackingScreen: Setting up Ably status stream');
       
-      _deliveryChannel = Supabase.instance.client
-          .channel('delivery:${widget.deliveryId}')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'deliveries',
-            filter: PostgresChangeFilter(
-              type: PostgresChangeFilterType.eq,
-              column: 'id',
-              value: widget.deliveryId,
-            ),
-            callback: (payload) {
-              debugPrint('🔥 Supabase: Delivery status update received');
-              debugPrint('📦 Payload: $payload');
-              
-              final deliveryData = payload.newRecord;
-              debugPrint('📋 New status: ${deliveryData['status']}');
-              _updateDeliveryStatus(deliveryData);
-            },
-          )
-          .subscribe();
+      _statusUpdateSubscription = _realtimeService.statusUpdateStream.listen(
+        (statusData) {
+          if (mounted) {
+            debugPrint('� Ably: Status update received');
+            debugPrint('📋 New status: ${statusData['status']}');
+            _updateDeliveryStatus(statusData);
+          }
+        },
+        onError: (error) {
+          debugPrint('❌ Ably status subscription error: $error');
+        },
+      );
       
-      debugPrint('✅ TrackingScreen: Supabase realtime subscription active');
+      debugPrint('✅ TrackingScreen: Ably status subscription active');
       
       // Start a timer to detect if no location updates are received
       Timer(const Duration(seconds: 30), () {
@@ -402,19 +394,23 @@ class _TrackingScreenState extends State<TrackingScreen> {
   }
 
   void _updateDeliveryStatus(Map<String, dynamic> deliveryData) {
-    final previousStatus = _delivery?.status;
+    final previousStatus = _currentRealtimeStatus;
     final newStatus = deliveryData['status'];
     
-    debugPrint('📊 STATUS UPDATE:');
+    debugPrint('📊 STATUS UPDATE (Ably):');
     debugPrint('   Previous: "$previousStatus"');
     debugPrint('   New: "$newStatus"');
     debugPrint('   Stage mapping: ${_getDeliveryStage(newStatus)}');
     
+    // Update real-time status (from Ably)
     setState(() {
+      _currentRealtimeStatus = newStatus;
+      
+      // Also update delivery model for UI consistency
       if (_delivery != null) {
         _delivery = _delivery!.copyWith(
           status: newStatus,
-          updatedAt: DateTime.tryParse(deliveryData['updated_at'] ?? ''),
+          updatedAt: DateTime.now(), // Use current time since Ably is instant
         );
       }
     });
@@ -428,10 +424,8 @@ class _TrackingScreenState extends State<TrackingScreen> {
         debugPrint('🎉 Delivery completed - navigating to completion screen');
         Future.delayed(const Duration(milliseconds: 1500), () {
           if (mounted) {
-            Navigator.of(context).pushReplacementNamed(
-              '/completion',
-              arguments: _delivery,
-            );
+            // Use GoRouter navigation with extra parameter
+            context.go('/completion', extra: _delivery);
           }
         });
         return; // Don't fetch route for completed delivery
@@ -452,42 +446,32 @@ class _TrackingScreenState extends State<TrackingScreen> {
     final String message;
     final Color backgroundColor;
     
+    // Note: Customer only sees tracking screen AFTER driver has been assigned and accepted
+    // Status flow starts from 'going_to_pickup', not from 'driver_offered' or 'driver_assigned'
     switch (newStatus) {
-      case 'driver_offered':
-        message = 'Driver found - waiting for acceptance';
-        backgroundColor = Colors.amber;
-        break;
-      case 'driver_assigned':
-        message = 'Driver assigned and preparing for pickup';
-        backgroundColor = Colors.blue;
-        break;
       case 'going_to_pickup':
         message = 'Driver is heading to pickup location';
-        backgroundColor = Colors.blue;
+        backgroundColor = const Color(0xFF2196F3);
         break;
-      case 'pickup_arrived':
+      case 'at_pickup':
         message = 'Driver has arrived at pickup location';
-        backgroundColor = Colors.orange;
+        backgroundColor = const Color(0xFF2196F3);
         break;
       case 'package_collected':
         message = 'Package collected - heading your way!';
-        backgroundColor = Colors.purple;
+        backgroundColor = const Color(0xFF2196F3);
         break;
-      case 'going_to_destination':
-        message = 'Driver is on the way to you';
-        backgroundColor = Colors.green;
+      case 'in_transit':
+        message = 'Driver is on the way to drop off';
+        backgroundColor = const Color(0xFF2196F3);
         break;
       case 'at_destination':
         message = 'Driver has arrived at your location';
-        backgroundColor = Colors.amber;
-        break;
-      case 'in_transit':
-        message = 'Your delivery is on the way';
-        backgroundColor = Colors.green;
+        backgroundColor = const Color(0xFF2196F3);
         break;
       case 'delivered':
         message = 'Delivery completed successfully!';
-        backgroundColor = Colors.green;
+        backgroundColor = const Color(0xFF2196F3);
         break;
       case 'cancelled':
         message = 'Delivery has been cancelled';
@@ -529,7 +513,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   void _cleanup() {
     _locationSubscription.cancel();
     _driverSubscription.cancel();
-    _deliveryChannel?.unsubscribe(); // Properly unsubscribe from Supabase channel
+    _statusUpdateSubscription?.cancel(); // Cancel Ably status subscription
     _realtimeService.unsubscribe();
     _chatService?.dispose(); // Clean up chat service
   }
@@ -1068,9 +1052,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.7,
-        minChildSize: 0.5,
-        maxChildSize: 0.9,
+        initialChildSize: 0.6,
+        minChildSize: 0.3,
+        maxChildSize: 0.10,
         builder: (context, scrollController) {
           return Container(
             decoration: const BoxDecoration(

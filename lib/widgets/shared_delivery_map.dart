@@ -99,6 +99,10 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
   Timer? _locationUpdateDebouncer;
   Position? _pendingDriverLocation;
   
+  // 🚗 Polyline update tracking (to reduce polyline as driver moves)
+  Position? _lastPolylineUpdatePosition;
+  DateTime? _lastPolylineUpdateTime;
+  
   // 🎬 Line trim animation for traffic polylines
   late AnimationController _lineTrimController;
   Animation<double>? _lineTrimAnimation;
@@ -178,7 +182,7 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     
     // 🎬 Initialize line trim animation controller for traffic polylines
     _lineTrimController = AnimationController(
-      duration: const Duration(milliseconds: 1500), // 1.5 second smooth animation
+      duration: const Duration(milliseconds: 2500), // 2.5 seconds for smoother, more visible animation
       vsync: this,
     );
     
@@ -188,7 +192,7 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       end: 1.0,
     ).animate(CurvedAnimation(
       parent: _lineTrimController,
-      curve: Curves.easeInOut, // Smooth acceleration and deceleration
+      curve: Curves.easeOut, // Start fast, slow down at the end (feels more natural)
     ));
     
     // Listen to line trim animation to update map
@@ -511,8 +515,52 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       if (_pendingDriverLocation != null && mounted) {
         _animateDriverToPosition(_pendingDriverLocation!);
         debugPrint('🎬 Debounced driver position animated to: ${_pendingDriverLocation!.lat}, ${_pendingDriverLocation!.lng}');
+        
+        // 🔄 Check if we need to update the polyline as driver moves
+        _checkAndUpdatePolylineIfNeeded(_pendingDriverLocation!);
       }
     });
+  }
+
+  // 🔄 Check if driver has moved significantly and update polyline to reduce it
+  void _checkAndUpdatePolylineIfNeeded(Position currentDriverPosition) {
+    // Only update polyline if driver is actively delivering (going to pickup or delivery)
+    final polylinePhase = _getPolylinePhase();
+    if (polylinePhase != PolylinePhase.driverToPickup && 
+        polylinePhase != PolylinePhase.driverToDelivery) {
+      return; // No need to update polyline if not in active delivery phase
+    }
+    
+    // Don't update if we haven't set an initial polyline yet
+    if (_lastPolylineUpdatePosition == null) {
+      _lastPolylineUpdatePosition = currentDriverPosition;
+      _lastPolylineUpdateTime = DateTime.now();
+      return;
+    }
+    
+    // Calculate distance from last polyline update
+    final distanceFromLastUpdate = _calculateDistance(
+      _lastPolylineUpdatePosition!.lat.toDouble(),
+      _lastPolylineUpdatePosition!.lng.toDouble(),
+      currentDriverPosition.lat.toDouble(),
+      currentDriverPosition.lng.toDouble(),
+    );
+    
+    // Time since last update
+    final timeSinceLastUpdate = DateTime.now().difference(_lastPolylineUpdateTime ?? DateTime.now());
+    
+    // Update polyline if driver has moved 75+ meters OR 30+ seconds have passed
+    // This ensures polyline stays current while preventing excessive API calls
+    if (distanceFromLastUpdate > 0.075 || timeSinceLastUpdate.inSeconds > 30) {
+      debugPrint('🔄 Driver moved ${(distanceFromLastUpdate * 1000).toStringAsFixed(0)}m - updating polyline to reduce route');
+      
+      // Update tracking variables
+      _lastPolylineUpdatePosition = currentDriverPosition;
+      _lastPolylineUpdateTime = DateTime.now();
+      
+      // Trigger polyline recalculation from new driver position
+      _updatePolylineForStatus();
+    }
   }
 
   void _onMapCreated(MapboxMap mapboxMap) async {

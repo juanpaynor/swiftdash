@@ -19,6 +19,7 @@ class CustomerAblyRealtimeService {
   final AblyService _ablyService = AblyService();
   ably.RealtimeChannel? _currentChannel;
   StreamSubscription? _locationSubscription;
+  StreamSubscription? _statusSubscription;
   StreamSubscription? _presenceEnterSubscription;
   StreamSubscription? _presenceLeaveSubscription;
 
@@ -29,6 +30,8 @@ class CustomerAblyRealtimeService {
       StreamController<Map<String, dynamic>>.broadcast();
   final _driverStatusController = StreamController<String>.broadcast();
   final _connectionStatusController = StreamController<bool>.broadcast();
+  final _deliveryStatusController =
+      StreamController<Map<String, dynamic>>.broadcast();
 
   /// Stream of location updates
   /// 
@@ -44,6 +47,17 @@ class CustomerAblyRealtimeService {
   ///   'battery_level': 85
   /// }
   Stream<Map<String, dynamic>> get locationStream => _locationController.stream;
+
+  /// Stream of delivery status updates
+  /// 
+  /// Emits status data whenever driver changes delivery status:
+  /// {
+  ///   'delivery_id': '...',
+  ///   'status': 'package_collected',
+  ///   'timestamp': '2025-10-29T10:30:45Z'
+  /// }
+  Stream<Map<String, dynamic>> get statusUpdateStream =>
+      _deliveryStatusController.stream;
 
   /// Stream of driver status updates
   /// 
@@ -114,6 +128,33 @@ class CustomerAblyRealtimeService {
           debugPrint('❌ Error processing location update: $e');
           debugPrint('❌ Message data was: ${message.data}');
           debugPrint('❌ Stack trace: $e');
+        }
+      });
+
+      // Subscribe to status updates (NEW - direct from driver app)
+      _statusSubscription = _currentChannel!
+          .subscribe(name: 'status-update')
+          .listen((message) {
+        try {
+          debugPrint('📊 STATUS UPDATE RECEIVED:');
+          debugPrint('   - Name: ${message.name}');
+          debugPrint('   - Data: ${message.data}');
+          
+          // Convert Map<Object?, Object?> to Map<String, dynamic>
+          final rawData = message.data as Map<Object?, Object?>;
+          final statusData = Map<String, dynamic>.from(
+            rawData.map((key, value) => MapEntry(key.toString(), value))
+          );
+          
+          _deliveryStatusController.add(statusData);
+          
+          debugPrint('📊 Delivery status changed to: ${statusData['status']}');
+          if (statusData['timestamp'] != null) {
+            debugPrint('   - Timestamp: ${statusData['timestamp']}');
+          }
+        } catch (e) {
+          debugPrint('❌ Error processing status update: $e');
+          debugPrint('❌ Message data was: ${message.data}');
         }
       });
 
@@ -222,10 +263,12 @@ class CustomerAblyRealtimeService {
     try {
       // Cancel subscriptions
       await _locationSubscription?.cancel();
+      await _statusSubscription?.cancel();
       await _presenceEnterSubscription?.cancel();
       await _presenceLeaveSubscription?.cancel();
 
       _locationSubscription = null;
+      _statusSubscription = null;
       _presenceEnterSubscription = null;
       _presenceLeaveSubscription = null;
 
@@ -258,6 +301,7 @@ class CustomerAblyRealtimeService {
   Future<void> dispose() async {
     await unsubscribe();
     await _locationController.close();
+    await _deliveryStatusController.close();
     await _driverStatusController.close();
     await _connectionStatusController.close();
     debugPrint('🔌 Customer Ably service disposed');

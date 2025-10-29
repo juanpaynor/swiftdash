@@ -7,8 +7,6 @@ import 'package:swiftdash/screens/signup_screen.dart';
 import 'package:swiftdash/screens/tracking_screen.dart';
 import 'package:swiftdash/screens/addresses_screen.dart';
 import 'package:swiftdash/screens/location_selection_screen.dart';
-import 'package:swiftdash/screens/delivery_contacts_screen.dart';
-import 'package:swiftdash/screens/order_summary_screen.dart';
 import 'package:swiftdash/screens/matching_screen.dart';
 import 'package:swiftdash/screens/profile_edit_screen.dart';
 import 'package:swiftdash/screens/saved_addresses_screen.dart';
@@ -93,23 +91,6 @@ final GoRouter router = GoRouter(
       builder: (BuildContext context, GoRouterState state) {
         final vehicleType = state.extra as VehicleType?;
         return LocationSelectionScreen(selectedVehicleType: vehicleType);
-      },
-    ),
-    GoRoute(
-      path: '/delivery-contacts',
-      builder: (BuildContext context, GoRouterState state) {
-        final data = state.extra as Map<String, dynamic>;
-        return DeliveryContactsScreen(
-          selectedVehicleType: data['selectedVehicleType'] as VehicleType,
-          locationData: data['locationData'] as Map<String, dynamic>,
-        );
-      },
-    ),
-    GoRoute(
-      path: '/order-summary',
-      builder: (BuildContext context, GoRouterState state) {
-        final orderData = state.extra as Map<String, dynamic>;
-        return OrderSummaryScreen(orderData: orderData);
       },
     ),
     GoRoute(
