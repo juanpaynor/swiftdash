@@ -102,6 +102,7 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
   // 🚗 Polyline update tracking (to reduce polyline as driver moves)
   Position? _lastPolylineUpdatePosition;
   DateTime? _lastPolylineUpdateTime;
+  List<Position>? _currentRouteCoordinates; // Store current route for smooth interpolation
   
   // 🎬 Line trim animation for traffic polylines
   late AnimationController _lineTrimController;
@@ -549,18 +550,120 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
     // Time since last update
     final timeSinceLastUpdate = DateTime.now().difference(_lastPolylineUpdateTime ?? DateTime.now());
     
-    // Update polyline if driver has moved 75+ meters OR 30+ seconds have passed
-    // This ensures polyline stays current while preventing excessive API calls
-    if (distanceFromLastUpdate > 0.075 || timeSinceLastUpdate.inSeconds > 30) {
-      debugPrint('🔄 Driver moved ${(distanceFromLastUpdate * 1000).toStringAsFixed(0)}m - updating polyline to reduce route');
+    // 🎯 NEW STRATEGY: Smooth interpolation instead of discrete API calls
+    // Update polyline frequently (every 20m) by interpolating along existing route
+    // Only fetch new route every 200m or 60 seconds to stay on track
+    if (distanceFromLastUpdate > 0.020) {
+      // Smooth update: trim passed points from existing polyline
+      _smoothUpdatePolylineProgress(currentDriverPosition);
       
-      // Update tracking variables
       _lastPolylineUpdatePosition = currentDriverPosition;
       _lastPolylineUpdateTime = DateTime.now();
+    } else if (distanceFromLastUpdate > 0.200 || timeSinceLastUpdate.inSeconds > 60) {
+      // Major update: fetch fresh route to correct drift
+      debugPrint('🔄 Major route update (${(distanceFromLastUpdate * 1000).toStringAsFixed(0)}m or ${timeSinceLastUpdate.inSeconds}s) - fetching new route');
       
-      // Trigger polyline recalculation from new driver position
+      _lastPolylineUpdatePosition = currentDriverPosition;
+      _lastPolylineUpdateTime = DateTime.now();
       _updatePolylineForStatus();
     }
+  }
+
+  // 🎯 Smoothly update polyline by removing passed points instead of redrawing entire route
+  void _smoothUpdatePolylineProgress(Position currentDriverPosition) {
+    if (_currentRouteCoordinates == null || _currentRouteCoordinates!.isEmpty) {
+      return; // No route to update
+    }
+    
+    // Find the closest point on the polyline to the driver's current position
+    int closestIndex = 0;
+    double minDistance = double.infinity;
+    
+    for (int i = 0; i < _currentRouteCoordinates!.length; i++) {
+      final coord = _currentRouteCoordinates![i];
+      final distance = _calculateDistance(
+        currentDriverPosition.lat.toDouble(),
+        currentDriverPosition.lng.toDouble(),
+        coord.lat.toDouble(),
+        coord.lng.toDouble(),
+      );
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestIndex = i;
+      }
+    }
+    
+    // Only trim if driver has passed at least 2 points and isn't at the end
+    if (closestIndex > 1 && closestIndex < _currentRouteCoordinates!.length - 2) {
+      // Remove all points before the closest index (driver has passed them)
+      final remainingCoordinates = _currentRouteCoordinates!.sublist(closestIndex);
+      
+      debugPrint('✂️ Smooth polyline trim: removed $closestIndex passed points, ${remainingCoordinates.length} remain');
+      
+      // Update the stored route
+      _currentRouteCoordinates = remainingCoordinates;
+      
+      // Redraw polyline with remaining coordinates
+      _redrawPolylineFromCoordinates(remainingCoordinates);
+    }
+  }
+
+  // 🎨 Redraw polyline from existing coordinates without fetching new route
+  Future<void> _redrawPolylineFromCoordinates(List<Position> coordinates) async {
+    if (_polylineAnnotationManager == null || coordinates.length < 2) return;
+    
+    try {
+      // Clear existing polylines
+      await _polylineAnnotationManager!.deleteAll();
+      
+      // Determine color based on current phase
+      final polylinePhase = _getPolylinePhase();
+      Color polylineColor;
+      
+      if (polylinePhase == PolylinePhase.driverToPickup) {
+        polylineColor = const Color(0xFF007AFF); // Blue for going to pickup
+      } else if (polylinePhase == PolylinePhase.driverToDelivery) {
+        polylineColor = const Color(0xFF8B5CF6); // Purple for delivering
+      } else {
+        polylineColor = const Color(0xFF007AFF); // Default blue
+      }
+      
+      // Create polyline from remaining coordinates
+      await _createPolylineFromCoordinates(coordinates, polylineColor, 'Smooth Update');
+      
+    } catch (e) {
+      debugPrint('❌ Error redrawing polyline: $e');
+    }
+  }
+
+  // Helper to create polyline from coordinate list
+  Future<void> _createPolylineFromCoordinates(List<Position> coordinates, Color color, String label) async {
+    if (_polylineAnnotationManager == null || coordinates.length < 2) return;
+    
+    // 🎯 Adjust first point to connect to driver marker edge (not center)
+    final adjustedCoordinates = List<Position>.from(coordinates);
+    if (adjustedCoordinates.length >= 2 && _driverLocation != null) {
+      final driverPos = Position(_driverLocation!.lng, _driverLocation!.lat);
+      final nextPoint = adjustedCoordinates[1]; // Second point in route
+      
+      // Calculate connection point on marker's FRONT edge
+      final edgePoint = _getPolylineConnectionPoint(driverPos, nextPoint);
+      adjustedCoordinates[0] = edgePoint;
+      
+      debugPrint('🎯 Smooth update: Polyline adjusted to connect at marker FRONT edge');
+    }
+    
+    final polylineGeometry = LineString(coordinates: adjustedCoordinates);
+    final polylineOptions = PolylineAnnotationOptions(
+      geometry: polylineGeometry,
+      lineColor: color.value,
+      lineWidth: 5.0,
+      lineOpacity: 0.9,
+    );
+    
+    await _polylineAnnotationManager!.create(polylineOptions);
+    debugPrint('✅ Polyline redrawn: $label (${adjustedCoordinates.length} points)');
   }
 
   void _onMapCreated(MapboxMap mapboxMap) async {
@@ -1446,7 +1549,24 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       // Convert route coordinates to Position objects
       final routePositions = route.map((coord) => Position(coord['lng']!, coord['lat']!)).toList();
       
-      debugPrint('� Polyline Details:');
+      // 🎯 Adjust first point to connect to driver marker edge (not center)
+      if (routePositions.length >= 2 && _driverLocation != null) {
+        final driverPos = Position(_driverLocation!.lng, _driverLocation!.lat);
+        final nextPoint = routePositions[1]; // Second point in route
+        
+        // Calculate connection point on marker's FRONT edge
+        final edgePoint = _getPolylineConnectionPoint(driverPos, nextPoint);
+        routePositions[0] = edgePoint;
+        
+        debugPrint('🎯 Polyline adjusted to connect at marker FRONT edge');
+        debugPrint('   - Driver center: ${driverPos.lng}, ${driverPos.lat}');
+        debugPrint('   - Connection point (front): ${edgePoint.lng}, ${edgePoint.lat}');
+      }
+      
+      // 🎯 Store route coordinates for smooth interpolation
+      _currentRouteCoordinates = routePositions;
+      
+      debugPrint('📍 Polyline Details:');
       debugPrint('   - Label: $label');
       debugPrint('   - Total Points: ${routePositions.length}');
       debugPrint('   - First Point: ${routePositions.first.lng}, ${routePositions.first.lat}');
@@ -1463,8 +1583,8 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
       final polylineAnnotation = PolylineAnnotationOptions(
         geometry: LineString(coordinates: routePositions),
         
-        // � NEON BLUE CORE - Unaffected by dark map lighting!
-        lineColor: 0xFF00BFFF,         // � Deep Sky Blue - Bright neon blue
+        // 💙 NEON BLUE CORE - Unaffected by dark map lighting!
+        lineColor: 0xFF00BFFF,         // 💙 Deep Sky Blue - Bright neon blue
         lineWidth: 2.5,                // 📏 Thinner line
         lineOpacity: 1.0,              // 🔥 Full opacity
         lineSortKey: 999999.0,         // 🚀 MAXIMUM Z-INDEX - Force above ALL map layers
@@ -2829,6 +2949,41 @@ class _SharedDeliveryMapState extends State<SharedDeliveryMap> with TickerProvid
 
   // Get vehicle-type specific colors for map markers
 
-
+  /// Calculate point on the FRONT edge of driver marker circle
+  /// This makes the polyline connect to the marker's front edge (direction of travel)
+  Position _getPolylineConnectionPoint(Position driverPos, Position nextPoint) {
+    // Driver marker size (approximate radius in meters)
+    // The visual marker is ~40-50px, which translates to ~30-40 meters at typical zoom
+    const double markerRadiusMeters = 35.0;
+    
+    // Calculate bearing from driver to next point (direction of travel)
+    final double lat1 = driverPos.lat * math.pi / 180;
+    final double lon1 = driverPos.lng * math.pi / 180;
+    final double lat2 = nextPoint.lat * math.pi / 180;
+    final double lon2 = nextPoint.lng * math.pi / 180;
+    
+    final double dLon = lon2 - lon1;
+    final double y = math.sin(dLon) * math.cos(lat2);
+    final double x = math.cos(lat1) * math.sin(lat2) - 
+                     math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
+    final double bearing = math.atan2(y, x);
+    
+    // Earth's radius in meters
+    const double earthRadius = 6371000.0;
+    
+    // Calculate new point at marker's FRONT edge along the bearing
+    // (moving towards the next point, not away from it)
+    final double angularDistance = markerRadiusMeters / earthRadius;
+    final double lat3 = math.asin(
+      math.sin(lat1) * math.cos(angularDistance) +
+      math.cos(lat1) * math.sin(angularDistance) * math.cos(bearing)
+    );
+    final double lon3 = lon1 + math.atan2(
+      math.sin(bearing) * math.sin(angularDistance) * math.cos(lat1),
+      math.cos(angularDistance) - math.sin(lat1) * math.sin(lat3)
+    );
+    
+    return Position(lon3 * 180 / math.pi, lat3 * 180 / math.pi);
+  }
 
 }

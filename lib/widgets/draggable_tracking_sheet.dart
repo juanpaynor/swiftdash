@@ -48,9 +48,9 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
   @override
   void initState() {
     super.initState();
-    // Dynamic tab count: 2 if chat available, 1 if not
+    // No tabs needed anymore, but keep controller for compatibility
     _tabController = TabController(
-      length: widget.chatService != null ? 2 : 1,
+      length: 1,
       vsync: this,
     );
     
@@ -270,9 +270,10 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
 
               const Divider(height: 1),
 
-              // Tab Bar
-              if (widget.chatService != null)
+              // Chat and Call Action Buttons (replacing tabs)
+              if (widget.driverProfile != null)
                 Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF9FAFB),
                     border: Border(
@@ -282,108 +283,45 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
                       ),
                     ),
                   ),
-                  child: TabBar(
-                    controller: _tabController,
-                    onTap: (index) {
-                      // Reset unread count when switching to chat tab
-                      if (index == 1 && widget.chatService != null) {
-                        widget.chatService!.resetUnreadCount();
-                      }
-                    },
-                    labelColor: const Color(0xFF2E4A9B),
-                    unselectedLabelColor: const Color(0xFF6B7280),
-                    indicatorColor: const Color(0xFF2E4A9B),
-                    indicatorWeight: 3,
-                    labelStyle: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    unselectedLabelStyle: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    tabs: [
-                      const Tab(
-                        icon: Icon(Icons.info_outline, size: 20),
-                        text: 'Details',
-                      ),
-                      if (widget.chatService != null)
-                        Tab(
-                          icon: Stack(
-                            clipBehavior: Clip.none,
-                            children: [
-                              const Icon(Icons.chat_bubble_outline, size: 20),
-                              if (_unreadCount > 0)
-                                Positioned(
-                                right: -8,
-                                top: -4,
-                                child: Container(
-                                  padding: const EdgeInsets.all(4),
-                                  decoration: const BoxDecoration(
-                                    gradient: LinearGradient(
-                                      colors: [Color(0xFFEF4444), Color(0xFFDC2626)],
-                                      begin: Alignment.topLeft,
-                                      end: Alignment.bottomRight,
-                                    ),
-                                    shape: BoxShape.circle,
-                                  ),
-                                  constraints: const BoxConstraints(
-                                    minWidth: 18,
-                                    minHeight: 18,
-                                  ),
-                                  child: Text(
-                                    _unreadCount > 9 ? '9+' : _unreadCount.toString(),
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ),
-                              ),
-                          ],
+                  child: Row(
+                    children: [
+                      // Chat button (with unread indicator)
+                      Expanded(
+                        child: _buildActionButton(
+                          icon: Icons.chat_bubble_outline,
+                          label: 'Chat',
+                          onPressed: () => _messageDriver(),
+                          hasNotification: _unreadCount > 0,
+                          notificationCount: _unreadCount,
                         ),
-                        text: 'Chat',
+                      ),
+                      const SizedBox(width: 12),
+                      // Call button
+                      Expanded(
+                        child: _buildActionButton(
+                          icon: Icons.phone_outlined,
+                          label: 'Call',
+                          onPressed: () => _callDriver(),
+                        ),
                       ),
                     ],
                   ),
                 ),
 
-              // Content
+              // Content (no tabs, just details)
               Expanded(
-                child: TabBarView(
-                  controller: _tabController,
-                  children: [
-                    // Details Tab
-                    _buildDetailsTab(scrollController),
-                    
-                    // Chat Tab
-                    if (widget.chatService != null)
-                      _buildChatTab()
-                    else
-                      const Center(
-                        child: Text(
-                          'Chat is not available',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Color(0xFF6B7280),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
+                child: _buildDetailsTab(scrollController),
               ),
             ],
           ),
           
           // Floating circular progress ring (overlaps map and sheet)
           Positioned(
-            top: -50, // Slight overlap above sheet
-            left: MediaQuery.of(context).size.width / 2 - 90,
+            top: -60, // Increased overlap for bigger ring
+            left: MediaQuery.of(context).size.width / 2 - 110,  // Adjusted for 220px width
             child: CircularProgressRing(
               currentStage: widget.currentStage,
-              size: 180,
+              size: 220,  // Increased from 180
               eta: widget.estimatedArrival,
             ),
           ),
@@ -400,36 +338,12 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
       padding: const EdgeInsets.all(20),
       children: [
         // Space for overlapping circular ring
-        const SizedBox(height: 100),
+        const SizedBox(height: 120),  // Increased from 100 for bigger ring
         
-        // Chat and Call buttons (flanking the circular ring above)
-        if (widget.driverProfile != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                // Chat button (left)
-                _buildFloatingActionButton(
-                  icon: Icons.chat_bubble_outline,
-                  label: 'Chat',
-                  onPressed: () => _messageDriver(),
-                ),
-                
-                // Empty space for the circular ring
-                const SizedBox(width: 180),
-                
-                // Call button (right)
-                _buildFloatingActionButton(
-                  icon: Icons.phone_outlined,
-                  label: 'Call',
-                  onPressed: () => _callDriver(),
-                ),
-              ],
-            ),
-          ),
-        
+        // Space for circular ring (no flanking buttons)
         const SizedBox(height: 20),
+        
+        const SizedBox(height: 12),  // Reduced from 20
         
         // Status message
         Text(
@@ -442,7 +356,7 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
           ),
         ),
         
-        const SizedBox(height: 24),
+        const SizedBox(height: 16),  // Reduced from 24
         
         // Driver Information Section
         if (widget.driverProfile != null) ...[
@@ -591,145 +505,7 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
     );
   }
 
-  Widget _buildChatTab() {
-    if (_messages.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF2E4A9B), Color(0xFF1DA1F2)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF2E4A9B).withOpacity(0.3),
-                    blurRadius: 20,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.chat_bubble_outline,
-                color: Colors.white,
-                size: 48,
-              ),
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'No messages yet',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF111827),
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Start a conversation with your driver',
-              style: TextStyle(
-                fontSize: 14,
-                color: Color(0xFF6B7280),
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: () {
-                _openFullChat();
-              },
-              icon: const Icon(Icons.message, size: 20),
-              label: const Text(
-                'Open Chat',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2E4A9B),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 14,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                elevation: 2,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
 
-    // Show last few messages
-    final recentMessages = _messages.reversed.take(3).toList().reversed.toList();
-    
-    return Column(
-      children: [
-        // Recent messages preview
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(16),
-            reverse: false,
-            itemCount: recentMessages.length,
-            itemBuilder: (context, index) {
-              final message = recentMessages[index];
-              return _buildMessagePreview(message);
-            },
-          ),
-        ),
-
-        // Open full chat button
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border(
-              top: BorderSide(
-                color: const Color(0xFFE5E7EB).withOpacity(0.5),
-                width: 1,
-              ),
-            ),
-          ),
-          child: SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () {
-                _openFullChat();
-              },
-              icon: const Icon(Icons.chat, size: 20),
-              label: Text(
-                _messages.length > 3
-                    ? 'View All Messages (${_messages.length})'
-                    : 'Open Chat',
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2E4A9B),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                elevation: 2,
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
 
   Widget _buildMessagePreview(ChatMessage message) {
     final isFromMe = message.senderType == SenderType.customer;
@@ -836,35 +612,36 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
     final profilePictureUrl = driver['profile_picture_url'];
     final vehicleType = driver['vehicle_types']?['name'] ?? 'Vehicle';
     final vehicleModel = driver['vehicle_model'] ?? '';
+    final licensePlate = driver['license_plate'] ?? driver['vehicle_plate'] ?? '';
     final rating = (driver['rating'] ?? 0.0).toDouble();
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(20),  // Increased padding
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [Color(0xFFF9FAFB), Color(0xFFFFFFFF)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),  // Larger radius
         border: Border.all(
           color: const Color(0xFF2E4A9B).withOpacity(0.2),
-          width: 1.5,
+          width: 2,  // Thicker border
         ),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF2E4A9B).withOpacity(0.08),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
+            color: const Color(0xFF2E4A9B).withOpacity(0.12),  // More shadow
+            blurRadius: 16,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
       child: Row(
         children: [
-          // Profile Picture
+          // Profile Picture - Bigger
           Container(
-            width: 70,
-            height: 70,
+            width: 90,  // Increased from 70
+            height: 90,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
@@ -902,7 +679,7 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
                           ),
                           child: const Icon(
                             Icons.person,
-                            size: 35,
+                            size: 45,  // Larger icon
                             color: Colors.white,
                           ),
                         );
@@ -911,31 +688,88 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
                   )
                 : const Icon(
                     Icons.person,
-                    size: 35,
+                    size: 45,  // Larger icon
                     color: Colors.white,
                   ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 20),  // More spacing
 
           // Driver Info
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Driver Name
+                // Driver Name - Larger
                 Text(
                   driverName,
                   style: const TextStyle(
-                    fontSize: 18,
+                    fontSize: 20,  // Increased from 18
                     fontWeight: FontWeight.bold,
                     color: Color(0xFF111827),
+                    letterSpacing: 0.2,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 8),  // More spacing
 
-                // Vehicle Info
+                // Vehicle Model - PROMINENT (if available)
+                if (vehicleModel.isNotEmpty) ...[
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.directions_car,
+                        size: 18,
+                        color: Color(0xFF2E4A9B),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          vehicleModel,
+                          style: const TextStyle(
+                            fontSize: 16,  // Larger and bold
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF111827),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                ],
+
+                // License Plate - PROMINENT (if available)
+                if (licensePlate.isNotEmpty) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF111827),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: const Color(0xFFFFD700),  // Gold border
+                        width: 2,
+                      ),
+                    ),
+                    child: Text(
+                      licensePlate.toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        letterSpacing: 2,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                ],
+
+                // Vehicle Type Badge (smaller, less prominent)
                 Row(
                   children: [
                     Container(
@@ -944,50 +778,21 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF2E4A9B), Color(0xFF1DA1F2)],
-                          begin: Alignment.centerLeft,
-                          end: Alignment.centerRight,
-                        ),
+                        color: const Color(0xFF2E4A9B).withOpacity(0.1),
                         borderRadius: BorderRadius.circular(6),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.directions_car,
-                            size: 12,
-                            color: Colors.white,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            vehicleType,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (vehicleModel.isNotEmpty) ...[
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          vehicleModel,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF6B7280),
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                      child: Text(
+                        vehicleType,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF2E4A9B),
                         ),
                       ),
-                    ],
+                    ),
                   ],
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 8),
 
                 // Rating
                 Row(
@@ -1020,49 +825,72 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
     );
   }
 
-  Widget _buildFloatingActionButton({
+  Widget _buildActionButton({
     required IconData icon,
     required String label,
     required VoidCallback onPressed,
+    bool hasNotification = false,
+    int notificationCount = 0,
   }) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: const Color(0xFFE5E7EB),
-              width: 1,
+    return Container(
+      height: 56,
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF2E4A9B),
+          foregroundColor: Colors.white,
+          elevation: 2,
+          shadowColor: const Color(0xFF2E4A9B).withOpacity(0.3),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(icon, size: 20),
+                if (hasNotification && notificationCount > 0)
+                  Positioned(
+                    right: -8,
+                    top: -6,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFEF4444),
+                        shape: BoxShape.circle,
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 16,
+                        minHeight: 16,
+                      ),
+                      child: Text(
+                        notificationCount > 9 ? '9+' : notificationCount.toString(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+              ],
             ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.08),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
               ),
-            ],
-          ),
-          child: IconButton(
-            onPressed: onPressed,
-            icon: Icon(icon),
-            color: const Color(0xFF2E4A9B),
-            iconSize: 24,
-          ),
+            ),
+          ],
         ),
-        const SizedBox(height: 8),
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF6B7280),
-          ),
-        ),
-      ],
+      ),
     );
   }
 
@@ -1096,24 +924,10 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
   }
 
   void _messageDriver() async {
-    // Open in-app chat instead of SMS
+    // Open in-app chat directly
     if (widget.chatService != null) {
-      // Switch to chat tab
-      _tabController.animateTo(1);
-      
-      // Expand sheet to show chat
-      _controller.animateTo(
-        0.6,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-      );
-      
-      // After a brief delay, open full chat modal
-      Future.delayed(const Duration(milliseconds: 400), () {
-        if (mounted) {
-          _openFullChat();
-        }
-      });
+      // Open full chat modal immediately
+      _openFullChat();
     } else {
       // Fallback to SMS if chat not available
       final phoneNumber = widget.driverProfile?['phone_number'];

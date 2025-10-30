@@ -16,7 +16,7 @@ class CircularProgressRing extends StatefulWidget {
   const CircularProgressRing({
     super.key,
     required this.currentStage,
-    this.size = 180,
+    this.size = 220,  // Increased from 180
     this.eta,
   });
 
@@ -76,21 +76,22 @@ class _CircularProgressRingState extends State<CircularProgressRing>
   }
 
   double _getProgressValue(DeliveryStage stage) {
+    // Must match animated_status_banner.dart progress values
     switch (stage) {
       case DeliveryStage.orderConfirmed:
-        return 0.0;
+        return 0.0;   // 0% - Order just placed
       case DeliveryStage.driverAssigned:
-        return 0.15;
+        return 0.10;  // 10% - Driver found and accepted
       case DeliveryStage.goingToPickup:
-        return 0.30;
+        return 0.30;  // 30% - Driver traveling to pickup location
       case DeliveryStage.atPickup:
-        return 0.45;
+        return 0.40;  // 40% - Driver arrived at pickup
       case DeliveryStage.packageCollected:
-        return 0.60;
+        return 0.50;  // 50% - Halfway! Package secured
       case DeliveryStage.onTheWay:
-        return 0.85;
+        return 0.80;  // 80% - Actively delivering to you
       case DeliveryStage.delivered:
-        return 1.0;
+        return 1.0;   // 100% - Complete!
     }
   }
 

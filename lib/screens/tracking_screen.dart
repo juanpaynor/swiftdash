@@ -780,6 +780,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
       case 'in_transit':
       case 'on_the_way':
       case 'delivering':
+      case 'at_destination':  // Driver arrived at customer location
         return DeliveryStage.onTheWay;
       case 'delivered':
       case 'completed':
