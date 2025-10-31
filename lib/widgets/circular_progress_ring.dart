@@ -100,7 +100,7 @@ class _CircularProgressRingState extends State<CircularProgressRing>
       case DeliveryStage.orderConfirmed:
         return 'Confirmed';
       case DeliveryStage.driverAssigned:
-        return 'Driver\nAssigned';
+        return 'Going to\nPickup';  // Changed from "Driver Assigned"
       case DeliveryStage.goingToPickup:
         return 'Going to\nPickup';
       case DeliveryStage.atPickup:

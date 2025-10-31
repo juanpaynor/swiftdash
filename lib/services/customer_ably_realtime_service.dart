@@ -20,6 +20,7 @@ class CustomerAblyRealtimeService {
   ably.RealtimeChannel? _currentChannel;
   StreamSubscription? _locationSubscription;
   StreamSubscription? _statusSubscription;
+  StreamSubscription? _stopUpdateSubscription;
   StreamSubscription? _presenceEnterSubscription;
   StreamSubscription? _presenceLeaveSubscription;
 
@@ -31,6 +32,8 @@ class CustomerAblyRealtimeService {
   final _driverStatusController = StreamController<String>.broadcast();
   final _connectionStatusController = StreamController<bool>.broadcast();
   final _deliveryStatusController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _stopUpdateController =
       StreamController<Map<String, dynamic>>.broadcast();
 
   /// Stream of location updates
@@ -58,6 +61,19 @@ class CustomerAblyRealtimeService {
   /// }
   Stream<Map<String, dynamic>> get statusUpdateStream =>
       _deliveryStatusController.stream;
+
+  /// Stream of individual stop status updates (for multi-stop deliveries)
+  /// 
+  /// Emits stop data whenever driver updates a specific stop:
+  /// {
+  ///   'delivery_id': '...',
+  ///   'stop_id': '...',
+  ///   'stop_number': 2,
+  ///   'status': 'completed',
+  ///   'timestamp': '2025-10-31T10:30:45Z'
+  /// }
+  Stream<Map<String, dynamic>> get stopUpdateStream =>
+      _stopUpdateController.stream;
 
   /// Stream of driver status updates
   /// 
@@ -158,6 +174,33 @@ class CustomerAblyRealtimeService {
         }
       });
 
+      // Subscribe to stop updates (for multi-stop deliveries)
+      _stopUpdateSubscription = _currentChannel!
+          .subscribe(name: 'stop-update')
+          .listen((message) {
+        try {
+          debugPrint('🚏 STOP UPDATE RECEIVED:');
+          debugPrint('   - Name: ${message.name}');
+          debugPrint('   - Data: ${message.data}');
+          
+          // Convert Map<Object?, Object?> to Map<String, dynamic>
+          final rawData = message.data as Map<Object?, Object?>;
+          final stopData = Map<String, dynamic>.from(
+            rawData.map((key, value) => MapEntry(key.toString(), value))
+          );
+          
+          _stopUpdateController.add(stopData);
+          
+          debugPrint('🚏 Stop #${stopData['stop_number']} status: ${stopData['status']}');
+          if (stopData['timestamp'] != null) {
+            debugPrint('   - Timestamp: ${stopData['timestamp']}');
+          }
+        } catch (e) {
+          debugPrint('❌ Error processing stop update: $e');
+          debugPrint('❌ Message data was: ${message.data}');
+        }
+      });
+
       // Subscribe to presence - driver entered (online)
       _presenceEnterSubscription = _currentChannel!.presence
           .subscribe(action: ably.PresenceAction.enter)
@@ -234,16 +277,18 @@ class CustomerAblyRealtimeService {
       return presenceMessages;
     } catch (e) {
       debugPrint('❌ Failed to get presence: $e');
-      return [];
-    }
-  }
+      // Cancel subscriptions
+      await _locationSubscription?.cancel();
+      await _statusSubscription?.cancel();
+      await _stopUpdateSubscription?.cancel();
+      await _presenceEnterSubscription?.cancel();
+      await _presenceLeaveSubscription?.cancel();
 
-  /// Check if driver is currently online
-  Future<bool> isDriverOnline() async {
-    final presence = await getPresence();
-    return presence.any((member) {
-      if (member.data == null) return false;
-      
+      _locationSubscription = null;
+      _statusSubscription = null;
+      _stopUpdateSubscription = null;
+      _presenceEnterSubscription = null;
+      _presenceLeaveSubscription = null;
       try {
         // Convert Map<Object?, Object?> to Map<String, dynamic>
         final rawData = member.data as Map<Object?, Object?>;
@@ -295,15 +340,16 @@ class CustomerAblyRealtimeService {
   bool get isConnected => _ablyService.isConnected;
 
   /// Get connection state string
-  String get connectionStateString => _ablyService.connectionStateString;
-
   /// Dispose service and close all connections
   Future<void> dispose() async {
     await unsubscribe();
     await _locationController.close();
     await _deliveryStatusController.close();
+    await _stopUpdateController.close();
     await _driverStatusController.close();
     await _connectionStatusController.close();
+    debugPrint('🔌 Customer Ably service disposed');
+  } await _connectionStatusController.close();
     debugPrint('🔌 Customer Ably service disposed');
   }
 }

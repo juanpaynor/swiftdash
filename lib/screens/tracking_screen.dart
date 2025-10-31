@@ -66,6 +66,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   bool _isDriverOnline = false;
   DateTime? _lastLocationUpdate;
   StreamSubscription? _statusUpdateSubscription;
+  StreamSubscription? _stopUpdateSubscription;
 
   @override
   void initState() {
@@ -250,6 +251,22 @@ class _TrackingScreenState extends State<TrackingScreen> {
         },
         onError: (error) {
           debugPrint('❌ Ably location subscription error: $error');
+        },
+      );
+      
+      // Listen to stop updates (for multi-stop deliveries)
+      _stopUpdateSubscription = _realtimeService.stopUpdateStream.listen(
+        (stopData) {
+          if (mounted) {
+            debugPrint('🚏 Ably: Stop update received');
+            debugPrint('   Stop ID: ${stopData['stop_id']}');
+            debugPrint('   Stop Number: ${stopData['stop_number']}');
+            debugPrint('   Status: ${stopData['status']}');
+            _updateStopStatus(stopData);
+          }
+        },
+        onError: (error) {
+          debugPrint('❌ Ably stop subscription error: $error');
         },
       );
       
@@ -442,6 +459,76 @@ class _TrackingScreenState extends State<TrackingScreen> {
     }
   }
 
+  /// Update individual stop status (for multi-stop deliveries)
+  Future<void> _updateStopStatus(Map<String, dynamic> stopData) async {
+    final stopId = stopData['stop_id'] as String?;
+    final stopNumber = stopData['stop_number'] as int?;
+    final newStatus = stopData['status'] as String?;
+    
+    if (stopId == null || newStatus == null) {
+      debugPrint('⚠️ Invalid stop update data: $stopData');
+      return;
+    }
+    
+    debugPrint('🚏 Updating stop status:');
+    debugPrint('   Stop ID: $stopId');
+    debugPrint('   Stop Number: $stopNumber');
+    debugPrint('   New Status: $newStatus');
+    
+    // Update local stops list
+    final updatedStops = _stops.map((stop) {
+      if (stop.id == stopId) {
+        debugPrint('   ✅ Found matching stop - updating from ${stop.status} to $newStatus');
+        return stop.copyWith(
+          status: newStatus,
+          arrivedAt: newStatus == 'in_progress' || newStatus == 'arrived' ? DateTime.now() : stop.arrivedAt,
+          completedAt: newStatus == 'completed' ? DateTime.now() : stop.completedAt,
+        );
+      }
+      return stop;
+    }).toList();
+    
+    setState(() {
+      _stops = updatedStops;
+    });
+    
+    // Show notification for stop completion
+    if (newStatus == 'completed' && stopNumber != null) {
+      final stop = _stops.firstWhere((s) => s.id == stopId);
+      final String message;
+      
+      if (stop.isPickup) {
+        message = 'Package collected from pickup location';
+      } else {
+        message = 'Stop #${stopNumber} completed';
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              message,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            backgroundColor: const Color(0xFF4CAF50),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+    
+    // Check if all stops are completed
+    if (_multiStopService.areAllStopsCompleted(_stops)) {
+      debugPrint('🎉 All stops completed!');
+      // The final 'delivered' status will be sent separately via status-update
+    }
+    
+    debugPrint('✅ Stop status updated in UI');
+  }
+
   void _showStatusUpdateNotification(String newStatus) {
     final String message;
     final Color backgroundColor;
@@ -514,6 +601,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
     _locationSubscription.cancel();
     _driverSubscription.cancel();
     _statusUpdateSubscription?.cancel(); // Cancel Ably status subscription
+    _stopUpdateSubscription?.cancel(); // Cancel stop update subscription
     _realtimeService.unsubscribe();
     _chatService?.dispose(); // Clean up chat service
   }

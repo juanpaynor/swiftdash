@@ -242,10 +242,11 @@ serve(async (req) => {
     )
 
     // Calculate pricing from database
-    const totalStops = body.dropoffStops.length
-    const pricing = await calculateMultiStopPrice(supabaseClient, body.vehicleTypeId, totalKm, totalStops)
+    const totalDropoffs = body.dropoffStops.length
+    const totalStops = totalDropoffs + 1 // +1 for pickup stop
+    const pricing = await calculateMultiStopPrice(supabaseClient, body.vehicleTypeId, totalKm, totalDropoffs)
 
-    console.log(`Multi-stop delivery: ${totalStops} stops, ${totalKm.toFixed(2)}km, ₱${pricing.totalPrice.toFixed(2)}`)
+    console.log(`Multi-stop delivery: ${totalStops} stops (1 pickup + ${totalDropoffs} dropoffs), ${totalKm.toFixed(2)}km, ₱${pricing.totalPrice.toFixed(2)}`)
 
     // Create delivery record
     const deliveryData: any = {
@@ -313,8 +314,44 @@ serve(async (req) => {
     }
 
     // Create delivery stops
+    // CRITICAL FIX: Create pickup stop first (stop #1)
+    const pickupStop = {
+      delivery_id: delivery.id,
+      stop_number: 1,
+      stop_type: 'pickup',
+      address: body.pickup.address,
+      latitude: body.pickup.location.lat,
+      longitude: body.pickup.location.lng,
+      recipient_name: body.pickup.contactName,
+      recipient_phone: body.pickup.contactPhone,
+      delivery_notes: body.pickup.instructions || null,
+      status: 'pending',
+      distance_from_previous_km: 0,
+    }
+
+    // Create dropoff stops starting at stop #2
+    const dropoffStops = body.dropoffStops.map((stop, index) => ({
+      delivery_id: delivery.id,
+      stop_number: index + 2, // Start at 2 (pickup is 1)
+      stop_type: 'dropoff',
+      address: stop.address,
+      latitude: stop.location.lat,
+      longitude: stop.location.lng,
+      recipient_name: stop.contactName,
+      recipient_phone: stop.contactPhone,
+      delivery_notes: stop.instructions || null,
+      package_description: stop.packageDescription || null,
+      package_weight: stop.packageWeight || null,
+      status: 'pending',
+      distance_from_previous_km: distances[index],
+    }))
+
+    // Combine pickup + dropoffs for database insert
+    const stopsInsertData = [pickupStop, ...dropoffStops]
+    
+    // For return data (keep original format with just dropoffs)
     const stopsData: DeliveryStop[] = body.dropoffStops.map((stop, index) => ({
-      stopNumber: index + 1,
+      stopNumber: index + 2, // Match database numbering
       stopType: 'dropoff',
       address: stop.address,
       latitude: stop.location.lat,
@@ -327,22 +364,6 @@ serve(async (req) => {
       status: 'pending',
       deliveryId: delivery.id,
       distanceFromPreviousKm: distances[index],
-    }))
-
-    const stopsInsertData = stopsData.map(stop => ({
-      delivery_id: stop.deliveryId,
-      stop_number: stop.stopNumber,
-      stop_type: stop.stopType,
-      address: stop.address,
-      latitude: stop.latitude,
-      longitude: stop.longitude,
-      recipient_name: stop.recipientName,
-      recipient_phone: stop.recipientPhone,
-      delivery_notes: stop.deliveryNotes,
-      package_description: stop.packageDescription,
-      package_weight: stop.packageWeight,
-      status: stop.status,
-      distance_from_previous_km: stop.distanceFromPreviousKm,
     }))
 
     const { error: stopsError } = await supabaseClient
@@ -360,7 +381,7 @@ serve(async (req) => {
       )
     }
 
-    console.log(`✅ Multi-stop delivery created: ${delivery.id} with ${totalStops} stops`)
+    console.log(`✅ Multi-stop delivery created: ${delivery.id} with ${totalStops} stops (1 pickup + ${totalDropoffs} dropoffs)`)
 
     // Return delivery with calculated pricing
     return new Response(

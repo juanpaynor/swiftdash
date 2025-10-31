@@ -343,20 +343,7 @@ class _DraggableTrackingSheetState extends State<DraggableTrackingSheet>
         // Space for circular ring (no flanking buttons)
         const SizedBox(height: 20),
         
-        const SizedBox(height: 12),  // Reduced from 20
-        
-        // Status message
-        Text(
-          _getStatusMessage(widget.currentStage),
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF111827),
-          ),
-        ),
-        
-        const SizedBox(height: 16),  // Reduced from 24
+        const SizedBox(height: 16),
         
         // Driver Information Section
         if (widget.driverProfile != null) ...[
